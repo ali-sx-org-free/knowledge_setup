@@ -4,7 +4,7 @@
 
 | 交付項 | 實作 |
 | --- | --- |
-| 知識持久化 | 使用你指定的 **Git 倉庫**：知識以 YAML 檔案存放，每次寫入是一次提交，作者記為提交知識的人、智能體或管道；定期拉取他人直接在 Git 中做的修改 |
+| 知識持久化 | 使用你指定的 **Git 倉庫**（SSH 部署金鑰或 HTTPS 權杖）：知識以 YAML 檔案存放，每次寫入是一次提交，作者記為提交知識的人、智能體或管道；定期拉取他人直接在 Git 中做的修改 |
 | 管理後台 | `/`：知識管理與可視化（主體、斷言、客體、關係、知識圖譜、層級分佈、重驗隊列、衝突、反饋、缺口、動力層、API 金鑰、設定），視覺沿用 `agent_subscribe_plan` 的 Portal 樣式包 |
 | 生產型 API | `/api/v1`：三方智能體提交與管理主體、客體、綁定、斷言、關係，支持批量提交、補證據、校驗、衝突、反饋 |
 | 教程 prompt API | `GET /api/v1/prompt`（公開）：三方智能體拉取後即可學會如何生產知識；`?role=consumer` 為消費教程 |
@@ -20,7 +20,9 @@ ADMIN_PASSWORD='請換成你的密碼' npm start
 # 打開 http://localhost:8080 ，用上面的密碼登入
 ```
 
-1. 登入後到 **設定 › 知識倉庫** 填入你的 Git 倉庫地址與存取權杖（GitHub 細粒度 PAT，需 Contents 讀寫），點「測試連接」後「保存並切換」。不填則使用本地倉庫。
+1. 登入後到 **設定 › 知識倉庫** 關聯你的 Git 倉庫，兩種方式任選，點「測試連接」後「保存並切換」。不填則使用本地倉庫。
+   - **SSH 部署金鑰**（推薦）：地址填 `git@github.com:org/repo.git`，在同一頁產生部署金鑰，把公鑰添加到倉庫 Settings › Deploy keys 並勾選 Allow write access。見下方「[用 SSH 部署金鑰關聯倉庫](#用-ssh-部署金鑰關聯倉庫)」。
+   - **HTTPS 權杖**：地址填 `https://github.com/org/repo.git`，再填存取權杖（GitHub 細粒度 PAT，需 Contents 讀寫）。
 2. 同一頁可點 **載入示例資料**：設計文件中的「可售庫存」示例與庫存域試點主體（系統名、表名、接口名均為示意）。
 3. 到 **設定 › 自然語言** 填入 OpenRouter API Key 與模型 ID。
 4. 到 **接入 › API 金鑰** 為三方智能體發放金鑰，把 `http://<你的地址>/api/v1/prompt` 交給它。
@@ -42,7 +44,25 @@ knowledge/
   stats/usage.yaml         主體被使用次數（重驗優先級、L0 覆蓋率）
 ```
 
-機密（Git 權杖、OpenRouter Key、管理員密碼雜湊、API 金鑰雜湊）只存在服務本地的 `DATA_DIR/settings.json`，不進入知識倉庫。
+機密（Git 權杖、OpenRouter Key、管理員密碼雜湊、API 金鑰雜湊）只存在服務本地的 `DATA_DIR/settings.json`，SSH 部署金鑰的私鑰只存在 `DATA_DIR/ssh/`（0600），都不進入知識倉庫。
+
+## 用 SSH 部署金鑰關聯倉庫
+
+部署金鑰（Deploy key）是只屬於一個倉庫的 SSH 金鑰，不綁定個人帳號，適合服務長期讀寫知識倉庫。
+
+1. **設定 › 知識倉庫**：倉庫地址填 SSH 形式，例如 `git@github.com:ali-sx-org-free/knowledge_site_v01.git`。頁面顯示「認證方式：SSH 部署金鑰」。
+2. 在「SSH 部署金鑰」面板點 **產生部署金鑰**（ed25519），再點 **複製公鑰**。已有私鑰（無密碼）也可以點「貼上已有私鑰」。
+3. 打開倉庫 **Settings › Deploy keys › Add deploy key**（GitHub 地址時面板上有直達鏈接），貼上公鑰，**勾選 Allow write access**（知識寫入需要推送），保存。
+4. 回到後台點 **測試連接**：空倉庫顯示「倉庫為空，首次寫入會建立分支」。再點 **保存並切換**。
+5. 首次連接會記下遠端主機指紋（面板「已記下的主機指紋」），之後指紋不符會拒絕連接；可與 [GitHub 公布的指紋](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints) 核對。
+
+說明：
+
+- 私鑰只存在 `DATA_DIR/ssh/deploy_key`（0600），接口只返回公鑰。git 只在連接遠端的那一次子程序中經 `GIT_SSH_COMMAND` 使用這把金鑰和服務自己的 `known_hosts`，不讀 `~/.ssh`、使用者的 ssh 設定和 git 全局設定（因此 `url.insteadOf` 之類的改寫不會把 SSH 地址悄悄換成別的協議）。
+- 以環境變數配置時：先執行 `npm run ssh-key`（容器內 `docker run --rm -v knowledge-data:/data knowledge node scripts/ssh-key.js`）產生並顯示公鑰，添加到 Deploy keys 後再設定 `KNOWLEDGE_GIT_URL` 啟動；或用 `KNOWLEDGE_GIT_SSH_KEY_FILE` 指定已有的私鑰檔。
+- 網絡只放行 443 時，GitHub 可改用 `ssh://git@ssh.github.com:443/<owner>/<repo>.git`。
+- 常見錯誤會附上提示：`Permission denied (publickey)`（公鑰未添加到這個倉庫）、`marked as read only`（沒有勾選 Allow write access）、`Host key verification failed`（主機指紋變了，確認後在面板清除主機指紋）。
+- SSH 地址但沒有產生部署金鑰時，沿用舊行為：使用伺服器本機的 ssh 設定。
 
 ## 設計文件到實作的對應
 
@@ -84,8 +104,9 @@ curl -s -X POST http://localhost:8080/api/v1/ask \
 
 ```bash
 npm run dev     # 監聽修改自動重啟
-npm test        # 23 項：模型規則 + 端到端（含 OpenRouter 模擬、Git 遠端推送與回拉）
+npm test        # 28 項：模型規則 + 端到端（含 OpenRouter 模擬、Git 遠端推送與回拉、經本機 sshd 的 SSH 部署金鑰；沒有 sshd 時該項跳過）
 npm run seed    # 命令列載入示例資料
+npm run ssh-key # 顯示 SSH 部署金鑰的公鑰（沒有時產生）
 ```
 
 技術選型：Node.js + Express 5 + `yaml`，後台為無建置步驟的原生 JS（ES modules），圖譜為自寫的力導向 SVG，無 CDN 依賴。

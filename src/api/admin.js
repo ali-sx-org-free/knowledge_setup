@@ -29,7 +29,7 @@ export function adminRouter(ctx) {
     res.json({
       data: {
         health: S().health({ windowDays: Number(req.query.days) || 7 }),
-        git: { ...S().repo.status, head: await S().repo.head(), subdir: S().subdir, loadErrors: S().loadErrors },
+        git: { ...S().repo.status, auth: S().repo.authMode(), head: await S().repo.head(), subdir: S().subdir, loadErrors: S().loadErrors },
         llm: { enabled: ctx.llm.enabled, model: ctx.llm.model },
         log: await S().repo.log({ limit: 8 })
       }
@@ -38,15 +38,16 @@ export function adminRouter(ctx) {
   r.get('/log', requireLogin, async (req, res) => res.json({ data: await S().repo.log({ limit: Math.min(200, Number(req.query.limit) || 50) }) }));
 
   // ---- 設定
-  r.get('/settings', requireAdmin, (req, res) => {
+  r.get('/settings', requireAdmin, async (req, res) => {
     res.json({
       data: {
         git: ctx.settings.publicSection('git'),
         llm: ctx.settings.publicSection('llm'),
         server: ctx.settings.publicSection('server'),
         adminPasswordFromEnv: !!ctx.env.ADMIN_PASSWORD,
-        gitStatus: S().repo.status,
+        gitStatus: { ...S().repo.status, auth: S().repo.authMode() },
         repoDir: S().repo.dir,
+        ssh: await ctx.ssh.info(),
         rules: S().config
       }
     });
@@ -56,9 +57,32 @@ export function adminRouter(ctx) {
     const url = req.body?.url || cur.url;
     if (!url) throw new HttpError(400, '請填寫倉庫地址', 'invalid_input');
     const token = req.body?.token && !String(req.body.token).startsWith('已設定') ? req.body.token : cur.token;
-    res.json({ data: await GitRepo.test({ url, token, username: req.body?.username || cur.username, branch: req.body?.branch || cur.branch }) });
+    if (/^\s*-/.test(url)) throw new HttpError(400, '倉庫地址格式不正確', 'invalid_input');
+    try {
+      res.json({ data: await GitRepo.test({ url, token, username: req.body?.username || cur.username, branch: req.body?.branch || cur.branch, ssh: ctx.ssh }) });
+    } catch (err) {
+      throw new HttpError(400, `無法連接：${err.message}`, 'git_error');
+    }
+  });
+
+  // ---- SSH 部署金鑰：私鑰只存本地 DATA_DIR/ssh/，接口只返回公鑰
+  r.get('/settings/git/ssh-key', requireAdmin, async (req, res) => res.json({ data: await ctx.ssh.info() }));
+  r.post('/settings/git/ssh-key', requireAdmin, async (req, res) => {
+    const privateKey = req.body?.privateKey;
+    if (privateKey) await ctx.ssh.import(privateKey);
+    else await ctx.ssh.generate();
+    res.status(201).json({ data: await ctx.ssh.info() });
+  });
+  r.delete('/settings/git/ssh-key', requireAdmin, async (req, res) => {
+    await ctx.ssh.remove();
+    res.json({ data: await ctx.ssh.info() });
+  });
+  r.delete('/settings/git/known-hosts', requireAdmin, async (req, res) => {
+    await ctx.ssh.clearHostKeys();
+    res.json({ data: await ctx.ssh.info() });
   });
   r.put('/settings/git', requireAdmin, async (req, res) => {
+    if (/^\s*-/.test(req.body?.url || '')) throw new HttpError(400, '倉庫地址格式不正確', 'invalid_input');
     const before = structuredClone(ctx.settings.data.git);
     ctx.settings.update('git', req.body || {});
     try {
@@ -69,7 +93,7 @@ export function adminRouter(ctx) {
       await ctx.reconfigure().catch(() => {});
       throw new HttpError(400, `無法使用該倉庫：${err.message}`, 'git_error');
     }
-    res.json({ data: { git: ctx.settings.publicSection('git'), status: S().repo.status, repoDir: S().repo.dir } });
+    res.json({ data: { git: ctx.settings.publicSection('git'), status: { ...S().repo.status, auth: S().repo.authMode() }, repoDir: S().repo.dir } });
   });
   r.put('/settings/llm', requireAdmin, (req, res) => {
     ctx.settings.update('llm', req.body || {});
