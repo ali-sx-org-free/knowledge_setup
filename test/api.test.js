@@ -259,3 +259,26 @@ test('管理後台：靜態頁面與登入保護', async () => {
   assert.equal(login.body.data.role, 'owner');
   assert.equal((await t.call('POST', '/admin/api/login', { apiKey: agentKey.body.data.secret })).status, 403, '後台只允許人登入');
 });
+
+test('錯誤碼：客戶端錯誤返回具體錯誤碼，不再顯示 internal_error', async () => {
+  await t.call('POST', '/admin/api/login', { password: 'test-admin-pass' }); // 上一項以負責人金鑰登入過
+  const cases = [
+    [await t.admin('POST', '/admin/api/keys', { name: 'x', kind: 'agent', role: 'owner' }), 400, 'owner_must_be_human'],
+    [await t.admin('POST', '/admin/api/keys', { name: ' ', kind: 'agent', role: 'consumer' }), 400, 'invalid_input'],
+    [await t.admin('PATCH', '/admin/api/keys/nope', { disabled: true }), 404, 'not_found'],
+    [await t.admin('DELETE', '/admin/api/keys/nope'), 404, 'not_found'],
+    [await t.admin('PUT', '/admin/api/password', { password: '12345678' }), 409, 'password_from_env']
+  ];
+  for (const [r, status, code] of cases) {
+    assert.equal(r.status, status, JSON.stringify(r.body));
+    assert.equal(r.body.error.code, code, JSON.stringify(r.body));
+    assert.ok(r.body.error.message);
+  }
+  const post = body => fetch(`${t.base}/api/v1/ask`, { method: 'POST', headers: { 'content-type': 'application/json' }, body });
+  const bad = await post('{"question":');
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).error.code, 'invalid_json');
+  const big = await post(JSON.stringify({ question: 'x'.repeat(5 * 1024 * 1024) }));
+  assert.equal(big.status, 413);
+  assert.deepEqual((await big.json()).error, { code: 'payload_too_large', message: '請求體過大（上限 4 MB）' });
+});

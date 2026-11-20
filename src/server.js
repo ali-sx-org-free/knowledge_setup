@@ -64,13 +64,17 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
   app.use(express.static(WEB_DIR, { index: 'index.html', maxAge: '5m' }));
   app.get('/', (req, res) => res.sendFile(path.join(WEB_DIR, 'index.html')));
 
+  // 錯誤碼：優先用錯誤自帶的 code；沒有時 4xx 按狀態碼給出（不再把客戶端錯誤標成 internal_error），5xx 才是 internal_error。
+  const STATUS_CODES = { 400: 'invalid_input', 401: 'unauthorized', 403: 'forbidden', 404: 'not_found', 405: 'method_not_allowed', 409: 'conflict', 413: 'payload_too_large', 415: 'unsupported_media_type', 422: 'rule_violation', 429: 'too_many_requests' };
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
     let status = err.status || err.statusCode || 500;
-    let code = err.code || 'internal_error';
-    if (err.type === 'entity.parse.failed') { status = 400; code = 'invalid_json'; }
+    let code = typeof err.code === 'string' ? err.code : status < 500 ? STATUS_CODES[status] || 'error' : 'internal_error';
+    let message = err.message;
+    if (err.type === 'entity.parse.failed') { status = 400; code = 'invalid_json'; message = `請求體不是合法的 JSON：${err.message}`; }
+    if (err.type === 'entity.too.large') message = '請求體過大（上限 4 MB）';
     if (!(err instanceof RuleError) && !(err instanceof HttpError) && status >= 500) logger.error?.(`[knowledge] ${req.method} ${req.originalUrl}`, err);
-    const body = { error: { code: typeof code === 'string' ? code : 'error', message: status >= 500 && !(err instanceof RuleError) && !(err instanceof HttpError) && !err.code ? '服務內部錯誤' : err.message } };
+    const body = { error: { code, message: status >= 500 && !(err instanceof RuleError) && !(err instanceof HttpError) && !err.code ? '服務內部錯誤' : message } };
     if (err.index !== undefined) body.error.index = err.index;
     if (err.missing) body.error.missing = err.missing;
     res.status(status).json(body);

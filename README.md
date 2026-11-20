@@ -104,7 +104,7 @@ curl -s -X POST http://localhost:8080/api/v1/ask \
 
 ```bash
 npm run dev     # 監聽修改自動重啟
-npm test        # 28 項：模型規則 + 端到端（含 OpenRouter 模擬、Git 遠端推送與回拉、經本機 sshd 的 SSH 部署金鑰；沒有 sshd 時該項跳過）
+npm test        # 29 項：模型規則 + 端到端（含 OpenRouter 模擬、Git 遠端推送與回拉、經本機 sshd 的 SSH 部署金鑰；沒有 sshd 時該項跳過）
 npm run seed    # 命令列載入示例資料
 npm run ssh-key # 顯示 SSH 部署金鑰的公鑰（沒有時產生）
 ```
