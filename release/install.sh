@@ -359,7 +359,7 @@ fetch_source() {
   for m in $RANKED; do
     reg="${regs[$m]%/}"
     say "安裝依賴（npm 鏡像 $(label_of "$reg")）"
-    if (cd "$NEW_APP" && PATH="$(dirname "$NODE_BIN"):$PATH" "$npm_cli" ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error --registry "$reg/"); then
+    if (cd "$NEW_APP" && PATH="$(dirname "$NODE_BIN"):$PATH" "$npm_cli" ci --omit=dev --ignore-scripts --no-audit --no-fund --no-update-notifier --loglevel=error --registry "$reg/"); then
       return 0
     fi
     warn "經 $(label_of "$reg") 安裝依賴失敗，換下一個鏡像"

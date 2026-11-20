@@ -332,7 +332,7 @@ function Get-Source {
     $reg = $NpmRegistries[$i].TrimEnd('/')
     Say "安裝依賴（npm 鏡像 $(Get-Label $reg)）"
     Push-Location $app
-    try { & $npm ci --omit=dev --ignore-scripts --no-audit --no-fund --loglevel=error --registry "$reg/" | Out-Host } finally { Pop-Location }
+    try { & $npm ci --omit=dev --ignore-scripts --no-audit --no-fund --no-update-notifier --loglevel=error --registry "$reg/" | Out-Host } finally { Pop-Location }
     if ($LASTEXITCODE -eq 0) { return }
     Warn "經 $(Get-Label $reg) 安裝依賴失敗，換下一個鏡像"
   }
