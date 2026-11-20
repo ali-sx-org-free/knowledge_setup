@@ -42,15 +42,20 @@ function Get-FreePort {
   return $port
 }
 
+# 輸出寫入檔案（不經管道），並設超時：即使安裝腳本卡住，也能看到它已輸出的內容
 function Invoke-Installer([string]$log, [string[]]$installerArgs) {
-  $ErrorActionPreference = 'Continue'
-  $out = & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $Dist 'install.ps1') @installerArgs 2>&1
-  $code = $LASTEXITCODE
-  $text = ($out | ForEach-Object { "$_" }) -join "`n"
-  [System.IO.File]::WriteAllText($log, $text)
+  $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$(Join-Path $Dist 'install.ps1')`"") + @($installerArgs | ForEach-Object { if ($_ -match '\s') { "`"$_`"" } else { $_ } })
+  $p = Start-Process -FilePath powershell -ArgumentList $argList -RedirectStandardOutput $log -RedirectStandardError "$log.err" -NoNewWindow -PassThru
+  $null = $p.Handle  # Windows PowerShell 5.1：先取控制代碼，結束後才讀得到 ExitCode
+  $finished = $p.WaitForExit(600000)
+  if (-not $finished) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+  $text = [System.IO.File]::ReadAllText($log)
+  $err = if (Test-Path -LiteralPath "$log.err") { [System.IO.File]::ReadAllText("$log.err") } else { '' }
   Write-Host $text
-  if ($code -ne 0) { throw "FAIL: install.ps1 退出碼 $code" }
-  return $text
+  if ($err.Trim()) { Write-Host "--- stderr ---`n$err" }
+  if (-not $finished) { throw 'FAIL: install.ps1 超過 10 分鐘沒有結束' }
+  if ($p.ExitCode -ne 0) { throw "FAIL: install.ps1 退出碼 $($p.ExitCode)" }
+  return $text + "`n" + $err
 }
 
 function Test-Http([string]$url) {

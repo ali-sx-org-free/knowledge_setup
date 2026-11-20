@@ -20,7 +20,6 @@ $Base = if ((Split-Path -Leaf $App) -eq 'app') { Split-Path -Parent $App } else 
 $Config = Join-Path $Base 'config.env'
 $LogDir = Join-Path $Base 'logs'
 $Log = Join-Path $LogDir 'knowledge.log'
-$ErrLog = Join-Path $LogDir 'knowledge.err.log'
 $PidFile = Join-Path $Base 'run\knowledge.pid'
 
 foreach ($dir in @((Join-Path $Base 'runtime\git\cmd'), (Join-Path $Base 'runtime\node'))) {
@@ -113,9 +112,23 @@ function Start-Knowledge {
   $node = Get-NodeExe
   New-Item -ItemType Directory -Force -Path $LogDir, (Split-Path $PidFile), $env:DATA_DIR | Out-Null
   if (Test-Path -LiteralPath $Log) { Move-Item -LiteralPath $Log -Destination (Join-Path $LogDir 'knowledge.prev.log') -Force }
-  if (Test-Path -LiteralPath $ErrLog) { Move-Item -LiteralPath $ErrLog -Destination (Join-Path $LogDir 'knowledge.prev.err.log') -Force }
   $server = Join-Path $App 'src\server.js'
-  $p = Start-Process -FilePath $node -ArgumentList "`"$server`"" -WorkingDirectory $Base -WindowStyle Hidden -RedirectStandardOutput $Log -RedirectStandardError $ErrLog -PassThru
+  # 經 cmd 重定向日誌、以 ShellExecute 啟動（Start-Process 不帶 -Redirect*）：子程序不繼承本程序的控制代碼。
+  # 若用 -RedirectStandardOutput，node 會繼承呼叫者的輸出管道，捕獲輸出的上層程式（CI、排程任務）會一直等到服務退出。
+  $cmdLine = "/d /s /c `"`"$node`" `"$server`" >> `"$Log`" 2>&1`""
+  $shell = Start-Process -FilePath $env:ComSpec -ArgumentList $cmdLine -WorkingDirectory $Base -WindowStyle Hidden -PassThru
+  $p = $null
+  for ($i = 0; $i -lt 50 -and -not $p; $i++) {
+    $child = Get-CimInstance -ClassName Win32_Process -Filter "ParentProcessId=$($shell.Id) AND Name='node.exe'" -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($child) { $p = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue }
+    elseif ($shell.HasExited) { break }
+    else { Start-Sleep -Milliseconds 100 }
+  }
+  if (-not $p) {
+    Write-Host "錯誤：服務沒有正常啟動，日誌如下（$Log）：" -ForegroundColor Red
+    if (Test-Path -LiteralPath $Log) { Get-Content -LiteralPath $Log -Tail 30 -Encoding UTF8 | Write-Host }
+    return 1
+  }
   [System.IO.File]::WriteAllText($PidFile, "$($p.Id)")
   # 等待服務就緒（公開端點 /api/v1/prompt 返回 200），最多 60 秒；程序提前退出時顯示日誌。
   $url = "http://$(Get-CheckHost):$(Get-Port)/api/v1/prompt"
@@ -128,7 +141,7 @@ function Start-Knowledge {
   }
   if (-not $ok) {
     Write-Host "錯誤：服務沒有正常啟動，日誌如下（$LogDir）：" -ForegroundColor Red
-    foreach ($f in @($Log, $ErrLog)) { if (Test-Path -LiteralPath $f) { Get-Content -LiteralPath $f -Tail 30 -Encoding UTF8 | Write-Host } }
+    if (Test-Path -LiteralPath $Log) { Get-Content -LiteralPath $Log -Tail 30 -Encoding UTF8 | Write-Host }
     if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $PidFile -Force -ErrorAction SilentlyContinue
     return 1
@@ -205,7 +218,6 @@ switch ($Command) {
     if ($Rest -contains '-f') { Get-Content -LiteralPath $Log -Tail 100 -Wait -Encoding UTF8 }
     else {
       Get-Content -LiteralPath $Log -Tail 200 -Encoding UTF8 | Write-Host
-      if ((Test-Path -LiteralPath $ErrLog) -and (Get-Item -LiteralPath $ErrLog).Length -gt 0) { Write-Host '--- stderr ---'; Get-Content -LiteralPath $ErrLog -Tail 50 -Encoding UTF8 | Write-Host }
     }
   }
   'run' { $code = Invoke-Node 'src\server.js' }
