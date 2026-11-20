@@ -1,4 +1,5 @@
 // 服務入口：組裝 Git 持久化、知識庫、API 與管理後台，並啟動保鮮排程。
+import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -112,7 +113,18 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
   };
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// 直接執行本檔時啟動服務。ESM 的 import.meta.url 是解析符號連結後的真實路徑，argv[1] 不是：
+// 經符號連結的目錄啟動（如 macOS 的 /var → /private/var）時要先取真實路徑再比較，否則程序會靜默退出。
+function isMain() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(path.resolve(process.argv[1])) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
+if (isMain()) {
   const srv = await createServer();
   const port = Number(process.env.PORT) || 8080;
   await srv.listen(port);

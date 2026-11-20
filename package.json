@@ -13,7 +13,9 @@
     "dev": "node --watch src/server.js",
     "seed": "node scripts/seed.js",
     "ssh-key": "node scripts/ssh-key.js",
-    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\""
+    "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "release:build": "bash release/build.sh",
+    "release:smoke": "bash release/test/smoke.sh"
   },
   "dependencies": {
     "express": "^5.1.0",

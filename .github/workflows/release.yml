@@ -1,0 +1,120 @@
+# 發佈：推送 v* 標籤時，測試 → 打包 → 冒煙測試 → 建立 GitHub Release 並上傳發佈包、安裝腳本與 SHA256SUMS。
+#   1. 修改 package.json 的 version（例如 0.2.0），合併到 main
+#   2. git tag v0.2.0 && git push origin v0.2.0
+# 標籤必須與 package.json 的版本一致；帶 - 的標籤（v0.2.0-rc.1）發佈為預發佈版本，不會成為 latest。
+# 也可以在 Actions 頁面手動執行：選擇標籤時會（重新）發佈該標籤；選擇分支時只打包並上傳為工作流產物。
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: 測試
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安裝 OpenSSH（SSH 部署金鑰端到端測試需要 sshd）
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq openssh-client openssh-server
+          sudo mkdir -p /run/sshd
+      - run: npm ci
+      - run: npm test
+
+  release:
+    name: 打包並發佈
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: 確定版本
+        id: version
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            TAG="$GITHUB_REF_NAME"
+            if [ "$TAG" != "$PKG" ]; then
+              echo "::error::標籤 $TAG 與 package.json 的版本 $PKG 不一致；請先修改 package.json 的 version 再打標籤"
+              exit 1
+            fi
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            TAG="$PKG"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          case "$TAG" in *-*) echo "prerelease=true" >> "$GITHUB_OUTPUT" ;; *) echo "prerelease=false" >> "$GITHUB_OUTPUT" ;; esac
+      - run: bash release/build.sh "${{ steps.version.outputs.tag }}"
+      - name: 冒煙測試
+        run: bash release/test/smoke.sh dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: knowledge_setup-${{ steps.version.outputs.tag }}
+          path: dist/
+      - name: 建立 GitHub Release
+        if: steps.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: |
+          BASE="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          PROXY="https://ghfast.top/$BASE"
+          {
+            echo "## 一鍵安裝"
+            echo
+            echo "不需要 clone 倉庫。安裝腳本會測試 GitHub 與多個國內代理的下載速度，選最快的來源下載並校驗 SHA-256；沒有 Node.js 20+ 時自動從最快的鏡像（nodejs.org、npmmirror、清華、中科大、華為雲、騰訊雲、阿里雲）下載獨立的 Node.js。"
+            echo
+            echo "**Linux / macOS**"
+            echo
+            echo '```bash'
+            echo "curl -fsSL $BASE/install.sh | bash -s -- --version $TAG"
+            echo "# GitHub 慢或打不開時，經代理取得腳本："
+            echo "curl -fsSL $PROXY/install.sh | bash -s -- --version $TAG"
+            echo '```'
+            echo
+            echo "**Windows（PowerShell）**"
+            echo
+            echo '```powershell'
+            echo "\$f=\"\$env:TEMP\\knowledge-install.ps1\"; curl.exe -fsSL -o \$f $BASE/install.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File \$f -Version $TAG"
+            echo '```'
+            echo
+            echo "安裝後服務在後台運行，打開 http://localhost:8080 。常用命令：\`knowledge status | stop | restart | logs | upgrade\`。離線安裝：下載下方的壓縮包與 SHA256SUMS，執行 \`install.sh --package knowledge_setup-$TAG.tar.gz\`（Windows：\`install.ps1 -Package knowledge_setup-$TAG.zip\`）。"
+            echo
+            echo "| 檔案 | 用途 |"
+            echo "| --- | --- |"
+            echo "| \`knowledge_setup-$TAG.tar.gz\` | Linux / macOS 發佈包（已含依賴） |"
+            echo "| \`knowledge_setup-$TAG.zip\` | Windows 發佈包（已含依賴） |"
+            echo "| \`install.sh\` / \`install.ps1\` | 一鍵安裝腳本 |"
+            echo "| \`SHA256SUMS\` | 校驗值 |"
+            echo
+            gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$TAG" --jq .body
+          } > notes.md
+          FLAGS=()
+          if [ "$PRERELEASE" = true ]; then FLAGS+=(--prerelease); else FLAGS+=(--latest); fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md "${FLAGS[@]}"
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "$TAG" --notes-file notes.md "${FLAGS[@]}"
+          fi

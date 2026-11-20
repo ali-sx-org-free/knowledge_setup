@@ -10,7 +10,71 @@
 | 教程 prompt API | `GET /api/v1/prompt`（公開）：三方智能體拉取後即可學會如何生產知識；`?role=consumer` 為消費教程 |
 | 消費型 API | `POST /api/v1/ask` 返回結構化知識卡 + 自然語言答案（經 **OpenRouter** 組織，未配置時用規則模板）；另有知識卡、圖譜、術語解析、取值 Action 等 |
 
-## 快速開始
+## 一鍵安裝（不需要 clone）
+
+**Linux / macOS**
+
+```bash
+curl -fsSL https://github.com/ali-sx-org-free/knowledge_setup/releases/latest/download/install.sh | bash
+# GitHub 慢或打不開時，經代理取得腳本（之後的下載仍會測速選源）：
+curl -fsSL https://ghfast.top/https://github.com/ali-sx-org-free/knowledge_setup/releases/latest/download/install.sh | bash
+```
+
+**Windows**（PowerShell，Windows 10 / 11）
+
+```powershell
+$f="$env:TEMP\knowledge-install.ps1"; curl.exe -fsSL -o $f https://github.com/ali-sx-org-free/knowledge_setup/releases/latest/download/install.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $f
+```
+
+GitHub 慢時把網址換成 `https://ghfast.top/https://github.com/ali-sx-org-free/...`。結束時終端會顯示後台地址（預設 <http://localhost:8080>）和自動生成的管理員密碼。
+
+安裝腳本做的事：
+
+1. **測速選源**：並行向下表各來源取 `SHA256SUMS`（取不到的直接跳過），再逐個下載發佈包的前 512 KB 測速，從最快的下載；下載後按 `SHA256SUMS` 校驗 SHA-256，不符就換下一個來源。`github.com` 可達時以它的校驗值為準，代理只負責加速。
+2. **Node.js**：系統已有 Node.js 20+ 就直接用；沒有或太舊時，同樣測速後從最快的鏡像下載獨立的 Node.js 22 到安裝目錄（不改動系統）。Windows 沒有 git 時另外下載 MinGit（固定版本，SHA-256 寫在腳本裡）。
+3. **安裝並啟動**：程式放在 `~/.knowledge_setup/app`（Windows：`%LOCALAPPDATA%\knowledge_setup\app`），建立 `knowledge` 命令，在後台啟動服務。發佈包已含依賴，不需要 `npm install`。
+
+| 下載內容 | 測速的來源（第一個為官方） |
+| --- | --- |
+| 發佈包、MinGit | `github.com`、`ghfast.top`、`gh-proxy.com`、`ghproxy.net`、`gh.llkk.cc`；MinGit 另有 npmmirror、華為雲 |
+| Node.js | `nodejs.org`、npmmirror、清華、中科大、華為雲、騰訊雲、阿里雲 |
+| npm 依賴（僅 `--ref` 源碼安裝） | `registry.npmjs.org`、npmmirror、騰訊雲、華為雲 |
+
+來源列表可以用環境變數 `KNOWLEDGE_GITHUB_MIRRORS`、`KNOWLEDGE_NODE_MIRRORS`、`KNOWLEDGE_NPM_REGISTRIES` 覆蓋（空格分隔），或用 `--mirror` / `--node-mirror` / `--registry` 只用指定的一個。
+
+**常用命令**
+
+| 命令 | 作用 |
+| --- | --- |
+| `knowledge status` | 運行狀態、訪問地址、初始管理員密碼 |
+| `knowledge stop` / `start` / `restart` | 停止 / 啟動 / 重啟（修改設定後） |
+| `knowledge logs [-f]` | 查看日誌 |
+| `knowledge upgrade` | 升級到最新版本（資料與設定保留）；再次執行安裝命令效果相同 |
+| `knowledge run` | 前台運行，給 systemd 等進程管理器用 |
+
+設定寫在安裝目錄的 `config.env`（格式同 [.env.example](.env.example)，例如 `PORT`、`ADMIN_PASSWORD`、`KNOWLEDGE_GIT_URL`），修改後 `knowledge restart`。資料在安裝目錄的 `data/`，升級不會動它。
+
+**安裝選項**（Linux / macOS 用 `curl ... | bash -s -- --port 9090` 的形式傳入；Windows 用 `-Port 9090` 這種寫法）
+
+| 選項 | 作用 |
+| --- | --- |
+| `--port 9090` | 服務端口 |
+| `--version v0.2.0` | 安裝指定版本 |
+| `--prefix DIR` | 安裝目錄 |
+| `--package FILE` | 離線安裝：先在能上網的機器下載發佈包和 `SHA256SUMS`，放在同一目錄 |
+| `--ref main` | 從源碼安裝尚未發佈的分支或標籤（依賴從測速最快的 npm 鏡像安裝） |
+| `--no-start` | 只安裝不啟動 |
+| `--force-node` | 即使系統有 Node.js 也使用獨立的 Node.js |
+
+還沒有發佈版本時，可以從 main 分支安裝：
+
+```bash
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/ali-sx-org-free/knowledge_setup/main/release/install.sh | bash -s -- --ref main
+```
+
+想卸載：`knowledge stop`，再刪除安裝目錄（裡面的 `data/` 是你的資料，需要時先備份）。
+
+## 從源碼運行
 
 需要 Node.js 20+ 與 git。
 
@@ -101,6 +165,26 @@ curl -s -X POST http://localhost:8080/api/v1/ask \
 ```
 
 `/ask` 的 `status`：`answered`、`ambiguous`（別名多義，帶 `subjectIds` 重問）、`need_inputs`（動態值缺參數）、`uncovered`（未收錄，已記為知識缺口）。每條引用都帶層級；OpenRouter 返回的引用會與知識範圍比對，範圍外的 ID 被丟棄。
+
+## CI 與發佈
+
+`.github/workflows/` 下兩條流水綫：
+
+| 流水綫 | 觸發 | 內容 |
+| --- | --- | --- |
+| `CI` | 每個 PR、推送到 main | 測試（Node 22 / 24，安裝 sshd 跑 SSH 部署金鑰端到端）；構建容器映像並確認能登入；打包發佈包；在 Linux、macOS（系統自帶 bash 3.2）、Windows（PowerShell 5.1）上跑一鍵安裝冒煙測試 |
+| `Release` | 推送 `v*` 標籤 | 測試 → 打包 → 冒煙測試 → 建立 GitHub Release，上傳發佈包（`.tar.gz` / `.zip`，已含依賴）、`install.sh`、`install.ps1`、`SHA256SUMS` |
+
+一鍵安裝的冒煙測試在本機模擬 4 個下載來源（正常、不可達、很慢、發佈包被篡改），確認腳本選最快的來源、拒絕被篡改的包並回退、升級時資料保留；同時真實地從 nodejs.org 下載 Node.js（Windows 另從 GitHub 下載 MinGit）。
+
+**發佈新版本**
+
+```bash
+npm version 0.2.0 --no-git-tag-version   # 修改 package.json 的版本，提交並合併到 main
+git tag v0.2.0 && git push origin v0.2.0  # 標籤必須與 package.json 一致；v0.2.0-rc.1 這類標籤發佈為預發佈版本
+```
+
+本地打包與測試：`npm run release:build`（產物在 `dist/`），`npm run release:smoke`。
 
 ## 開發
 
