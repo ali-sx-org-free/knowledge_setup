@@ -213,6 +213,7 @@ PAGES.dashboard = async () => {
       ${panel('知識倉庫', `<div class="panel-body"><dl class="kv">
         <dt>遠端</dt><dd>${esc(git.remote || '未配置（本地倉庫）')}</dd>
         <dt>分支 / HEAD</dt><dd>${esc(git.branch)} · <span class="mono">${esc(git.head || '—')}</span></dd>
+        <dt>認證</dt><dd>${esc(AUTH_TEXT[git.auth] || git.auth || '—')}</dd>
         <dt>最近拉取</dt><dd>${ago(git.lastPullAt)}</dd><dt>最近推送</dt><dd>${ago(git.lastPushAt)}</dd>
         <dt>狀態</dt><dd>${git.lastError ? `<span class="badge red">同步異常</span> <span class="cell-sub">${esc(git.lastError)}</span>` : '<span class="badge green">正常</span>'}${git.loadErrors?.length ? ` <span class="badge amber">${git.loadErrors.length} 個檔案無法解析</span>` : ''}</dd>
         <dt>自然語言</dt><dd>${o.llm.enabled ? `OpenRouter · ${esc(o.llm.model)}` : '未配置（使用規則模板）'}</dd>
@@ -624,24 +625,90 @@ PAGES.apidoc = async () => {
   content().innerHTML = `<div class="stack">${panel('基本資訊', `<div class="panel-body"><dl class="kv"><dt>根地址</dt><dd class="mono">${esc(spec.servers[0].url)}</dd><dt>認證</dt><dd><code>Authorization: Bearer &lt;API 金鑰&gt;</code>（教程、Schema、OpenAPI 公開）</dd><dt>回應</dt><dd><code>{ data, commit?, warnings? }</code>；錯誤 <code>{ error: { code, message } }</code></dd></dl></div>`)}${tags.map(t => panel(t, table(['方法', '路徑', '說明', '角色'], rows.filter(r => r.tag === t).map(r => `<tr><td>${pill(r.m, r.m === 'GET' ? '' : 'blue')}</td><td class="mono">${esc(r.p)}</td><td class="wrap">${esc(r.op.summary)}</td><td>${esc(r.op.description.replace('所需角色：', ''))}</td></tr>`)))).join('')}</div>`;
 };
 
+const AUTH_TEXT = { local: '本地倉庫（無遠端）', https: 'HTTPS（無權杖，僅公開倉庫可讀）', 'https-token': 'HTTPS 存取權杖', 'ssh-deploy-key': 'SSH 部署金鑰', 'ssh-system': 'SSH（未產生部署金鑰，使用本機 ssh 設定）' };
+const isSshUrl = u => /^(?:git\+)?ssh:\/\//i.test(u) || (!u.includes('://') && /^[A-Za-z0-9._-]+@[A-Za-z0-9.-]+:\S/.test(u));
+const githubDeployKeyUrl = u => {
+  const m = u.match(/^(?:git@github\.com:|(?:git\+)?ssh:\/\/git@(?:ssh\.)?github\.com(?::\d+)?\/|https:\/\/github\.com\/)([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?$/i);
+  return m ? `https://github.com/${m[1]}/${m[2]}/settings/keys/new` : null;
+};
+const urlAuth = (u, token, hasKey) => (!u ? 'local' : isSshUrl(u) ? (hasKey ? 'ssh-deploy-key' : 'ssh-system') : token ? 'https-token' : 'https');
+
+function sshPanel(ssh) {
+  if (!ssh.available) return panel('SSH 部署金鑰', '<div class="panel-body"><p class="notice warn">這台伺服器沒有安裝 OpenSSH 客戶端（ssh、ssh-keygen），無法使用 SSH 部署金鑰。容器映像已內置；本機運行請先安裝 OpenSSH。</p></div>');
+  const source = { generated: '後台產生（ed25519）', imported: '後台貼上的私鑰', env: `環境變數 KNOWLEDGE_GIT_SSH_KEY_FILE（${ssh.keyFile}）` }[ssh.source] || '—';
+  const key = ssh.hasKey
+    ? `<div class="copy-row"><code id="ssh-pub">${esc(ssh.publicKey)}</code><button class="button" type="button" id="copy-pub">複製公鑰</button></div>
+      <dl class="kv" style="margin-top:8px"><dt>指紋</dt><dd class="mono">${esc(ssh.fingerprint || '—')}</dd><dt>來源</dt><dd>${esc(source)}</dd>${ssh.createdAt ? `<dt>建立時間</dt><dd>${fmtTime(ssh.createdAt)}</dd>` : ''}</dl>`
+    : '<p class="notice">尚未產生部署金鑰。倉庫地址使用 SSH 形式時，需要先產生（或貼上）部署金鑰，並把公鑰添加到倉庫。</p>';
+  const buttons = ssh.source === 'env' ? '' : ssh.hasKey
+    ? '<button class="button" type="button" id="ssh-generate">重新產生</button><button class="button" type="button" id="ssh-import">貼上私鑰替換</button><button class="button danger" type="button" id="ssh-remove">刪除金鑰</button>'
+    : '<button class="button primary" type="button" id="ssh-generate">產生部署金鑰</button><button class="button" type="button" id="ssh-import">貼上已有私鑰</button>';
+  const hosts = ssh.hostKeys.length
+    ? `<details style="margin-top:10px"><summary>已記下的主機指紋（${ssh.hostKeys.length}）</summary><ul class="mono" style="font-size:11px;margin:8px 0;padding-left:18px">${ssh.hostKeys.map(h => `<li>${esc(h)}</li>`).join('')}</ul><p class="muted" style="font-size:12px">首次連接時記下，之後主機指紋不符會拒絕連接。GitHub 的官方指紋見 <a href="https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints" target="_blank" rel="noopener">GitHub 文檔</a>。</p><button class="button" type="button" id="ssh-clear-hosts">清除主機指紋</button></details>`
+    : '<p class="muted" style="font-size:12px;margin-top:10px">首次連接時會記下遠端主機指紋，之後指紋不符會拒絕連接。</p>';
+  return panel('SSH 部署金鑰', `<div class="panel-body">${key}
+    <div class="actions" style="margin-top:10px">${buttons}</div>
+    <div class="prose" style="font-size:12px;margin-top:12px"><ol>
+      <li>倉庫地址填 SSH 形式，例如 <code>git@github.com:your-org/knowledge.git</code>。</li>
+      <li>產生部署金鑰，點「複製公鑰」。</li>
+      <li>到倉庫 <strong>Settings › Deploy keys › Add deploy key</strong> 貼上公鑰，勾選 <strong>Allow write access</strong>（知識寫入需要推送）。<a id="deploy-link" target="_blank" rel="noopener" hidden>打開這個倉庫的 Deploy keys 頁面</a></li>
+      <li>點「測試連接」，通過後「保存並切換」。</li>
+    </ol></div>${hosts}</div>`);
+}
+
+let repoDraft = null; // 金鑰操作後重繪頁面時保留表單中尚未保存的輸入
+
 PAGES.repo = async () => {
   const s = await get('/admin/api/settings');
   const g = s.git;
+  const ssh = s.ssh;
   const src = k => (g[`${k}Source`] ? `<small>由環境變數 ${esc(g[`${k}Source`].replace('env:', ''))} 提供</small>` : '');
   const st = s.gitStatus;
   content().innerHTML = `<div class="two-col"><div class="stack">${panel('Git 倉庫', `<div class="panel-body"><form id="git-form">
-    ${field('倉庫地址', input('url', g.url, 'placeholder="https://github.com/your-org/supply-chain-knowledge.git（留空為純本地倉庫）"'), '支持 https 與 ssh；知識以 YAML 檔案存放，每次寫入一個提交')}${src('url')}
-    <div class="field-pair">${field('分支', input('branch', g.branch))}${field('知識目錄', input('subdir', g.subdir), '倉庫內存放知識的子目錄')}</div>
-    <div class="field-pair">${field('存取權杖（https）', input('token', g.token, 'type="password" autocomplete="off" placeholder="GitHub PAT 等；只存本地，不入庫"'))}${field('權杖用戶名', input('username', g.username))}</div>
+    ${field('倉庫地址', input('url', g.url, 'placeholder="git@github.com:your-org/knowledge.git 或 https://…（留空為純本地倉庫）"'), '支持 SSH（部署金鑰）與 HTTPS（存取權杖）；知識以 YAML 檔案存放，每次寫入一個提交')}${src('url')}
+    <p class="muted" style="font-size:12px;margin:6px 0 0">認證方式：<strong id="auth-mode"></strong></p>
+    <div class="field-pair" style="margin-top:12px">${field('分支', input('branch', g.branch))}${field('知識目錄', input('subdir', g.subdir), '倉庫內存放知識的子目錄')}</div>
+    <div class="field-pair">${field('存取權杖（僅 HTTPS）', input('token', g.token, 'type="password" autocomplete="off" placeholder="GitHub PAT 等；只存本地，不入庫"'))}${field('權杖用戶名', input('username', g.username))}</div>
     <div class="field-pair">${field('提交者名稱', input('authorName', g.authorName))}${field('提交者郵箱', input('authorEmail', g.authorEmail))}</div>
     <div class="field-pair">${field('自動拉取間隔（秒）', input('pullIntervalSec', g.pullIntervalSec, 'type="number" min="15"'), '定期拉取他人在 Git 中直接做的修改；重啟後生效')}<label class="check" style="margin-top:22px"><input type="checkbox" name="autoPush" ${g.autoPush ? 'checked' : ''}> 寫入後自動推送</label></div>
-    <div class="actions" style="margin-top:14px"><button class="button" type="button" id="git-test">測試連接</button><button class="button primary" type="submit">保存並切換</button></div></form></div>`)}</div>
-    <div class="stack">${panel('同步狀態', `<div class="panel-body"><dl class="kv"><dt>遠端</dt><dd>${esc(st.remote || '未配置')}</dd><dt>分支</dt><dd>${esc(st.branch)}</dd><dt>本地目錄</dt><dd class="mono">${esc(s.repoDir)}</dd><dt>最近拉取</dt><dd>${fmtTime(st.lastPullAt)}</dd><dt>最近推送</dt><dd>${fmtTime(st.lastPushAt)}</dd><dt>錯誤</dt><dd>${esc(st.lastError || '無')}</dd></dl><div class="actions" style="margin-top:12px"><button class="button" id="git-sync">立即同步</button></div></div>`)}
+    <div class="actions" style="margin-top:14px"><button class="button" type="button" id="git-test">測試連接</button><button class="button primary" type="submit">保存並切換</button></div></form></div>`)}
+    ${sshPanel(ssh)}</div>
+    <div class="stack">${panel('同步狀態', `<div class="panel-body"><dl class="kv"><dt>遠端</dt><dd>${esc(st.remote || '未配置')}</dd><dt>分支</dt><dd>${esc(st.branch)}</dd><dt>認證</dt><dd>${esc(AUTH_TEXT[st.auth] || st.auth || '—')}</dd><dt>本地目錄</dt><dd class="mono">${esc(s.repoDir)}</dd><dt>最近拉取</dt><dd>${fmtTime(st.lastPullAt)}</dd><dt>最近推送</dt><dd>${fmtTime(st.lastPushAt)}</dd><dt>錯誤</dt><dd style="white-space:pre-wrap">${esc(st.lastError || '無')}</dd></dl><div class="actions" style="margin-top:12px"><button class="button" id="git-sync">立即同步</button></div></div>`)}
     ${panel('示例資料', `<div class="panel-body"><p style="font-size:12px">載入設計文件中的「可售庫存」示例及庫存域試點主體（約 26 個主體、示意管道與 Action）。走真實流程：先提交為 L1/L2，再經 Action 校驗和負責人確認晉升。系統名、表名、接口名均為示意。</p><div class="actions" style="margin-top:10px"><button class="button" id="seed">載入示例資料</button></div></div>`)}</div></div>`;
-  $('#git-test').onclick = async () => { try { const r = await post('/admin/api/settings/git/test', formData($('#git-form'))); toast(r.data.empty ? '可連接：倉庫為空，首次寫入會建立分支' : `可連接：分支 ${r.data.branches.join('、')}${r.data.branchExists ? '' : '（目標分支尚不存在，將自動建立）'}`, 6000); } catch (e) { showError(e); } };
-  $('#git-form').onsubmit = async e => { e.preventDefault(); try { await put('/admin/api/settings/git', formData($('#git-form'))); toast('已切換知識倉庫'); render(); } catch (err) { showError(err); } };
+  const form = $('#git-form');
+  if (repoDraft) {
+    for (const [k, v] of Object.entries(repoDraft)) if (form[k]) form[k].type === 'checkbox' ? (form[k].checked = v) : (form[k].value = v);
+    repoDraft = null;
+  }
+  const rerender = () => { repoDraft = formData(form); render(); };
+  const updateAuth = () => {
+    const url = form.url.value.trim();
+    $('#auth-mode').textContent = AUTH_TEXT[urlAuth(url, form.token.value, ssh.hasKey)];
+    const link = $('#deploy-link');
+    if (link) {
+      const href = isSshUrl(url) ? githubDeployKeyUrl(url) : null;
+      link.hidden = !href;
+      if (href) link.href = href;
+    }
+  };
+  form.url.oninput = updateAuth;
+  form.token.oninput = updateAuth;
+  updateAuth();
+  $('#git-test').onclick = async () => { try { const r = await post('/admin/api/settings/git/test', formData(form)); toast(`可連接（${AUTH_TEXT[r.data.auth] || r.data.auth}）：${r.data.empty ? '倉庫為空，首次寫入會建立分支' : `分支 ${r.data.branches.join('、')}${r.data.branchExists ? '' : '（目標分支尚不存在，將自動建立）'}`}`, 6000); } catch (e) { showError(e); } };
+  form.onsubmit = async e => { e.preventDefault(); try { await put('/admin/api/settings/git', formData(form)); toast('已切換知識倉庫'); render(); } catch (err) { showError(err); } };
   $('#git-sync').onclick = async () => { try { const r = await post('/admin/api/sync'); toast(r.data.changed ? '已拉取遠端更新並重新載入' : '已是最新'); render(); } catch (e) { showError(e); } };
   $('#seed').onclick = async () => { try { const r = await post('/admin/api/seed'); toast(`已載入示例資料（${r.data.subjects} 個主體）`); location.hash = `subject/${r.data.focus}`; } catch (e) { showError(e); } };
+  if ($('#copy-pub')) $('#copy-pub').onclick = () => copy(ssh.publicKey);
+  const generate = async () => { await post('/admin/api/settings/git/ssh-key'); toast('已產生部署金鑰：複製公鑰並添加到倉庫的 Deploy keys（勾選 Allow write access）', 6000); rerender(); };
+  if ($('#ssh-generate')) $('#ssh-generate').onclick = () => (ssh.hasKey
+    ? modal('重新產生部署金鑰', '<p class="notice warn">舊的部署金鑰會立即被替換。需要把新公鑰添加到倉庫的 Deploy keys（並刪除舊的），否則同步會失敗。</p>', { label: '重新產生', run: generate })
+    : generate().catch(showError));
+  if ($('#ssh-import')) $('#ssh-import').onclick = () => modal('貼上 SSH 私鑰', `<p class="notice">私鑰只存在服務本地的 DATA_DIR/ssh/（權限 0600），不進入知識倉庫，接口也不會返回私鑰。不支持有密碼保護的私鑰。</p>${field('私鑰', textarea('privateKey', '', 'placeholder="-----BEGIN OPENSSH PRIVATE KEY-----" spellcheck="false" autocomplete="off"'))}`, {
+    label: '保存',
+    run: async () => { await post('/admin/api/settings/git/ssh-key', formData($('#dialog-content'))); toast('已保存私鑰；請確認對應公鑰已添加到倉庫的 Deploy keys'); rerender(); }
+  });
+  if ($('#ssh-remove')) $('#ssh-remove').onclick = () => modal('刪除部署金鑰', '<p>刪除後，SSH 倉庫地址將無法用部署金鑰認證；記得也到倉庫的 Deploy keys 刪除對應公鑰。</p>', { label: '刪除', run: async () => { await del('/admin/api/settings/git/ssh-key'); rerender(); } });
+  if ($('#ssh-clear-hosts')) $('#ssh-clear-hosts').onclick = () => modal('清除主機指紋', '<p>只在遠端主機確實更換了金鑰時使用。清除後，下次連接會重新記下主機指紋。</p>', { label: '清除', run: async () => { await del('/admin/api/settings/git/known-hosts'); rerender(); } });
 };
 
 PAGES.llm = async () => {

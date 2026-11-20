@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { Settings } from './config.js';
 import { GitRepo } from './git/repo.js';
+import { SshKeys } from './git/ssh.js';
 import { KnowledgeStore } from './store/store.js';
 import { RuleError } from './store/validity.js';
 import { ActionRunner } from './services/actions.js';
@@ -23,13 +24,15 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
   const ctx = { settings, env, logger, dataDir, fetch: fetchImpl };
   ctx.llm = new LlmClient({ settings, fetchImpl });
   ctx.auth = new Auth(ctx);
+  // SSH 部署金鑰（ssh 倉庫地址時使用）：DATA_DIR/ssh/，或由 KNOWLEDGE_GIT_SSH_KEY_FILE 指定私鑰檔
+  ctx.ssh = new SshKeys({ dir: path.join(dataDir, 'ssh'), keyFile: env.KNOWLEDGE_GIT_SSH_KEY_FILE });
 
   /** 依 Git 設定（重新）建立知識庫；切換倉庫時調用。 */
   ctx.reconfigure = async () => {
     const g = settings.section('git');
     const slug = crypto.createHash('sha1').update(`${g.url || 'local'}#${g.branch}`).digest('hex').slice(0, 12);
     const dir = env.KNOWLEDGE_REPO_DIR || path.join(dataDir, 'repos', slug);
-    const repo = new GitRepo({ dir, url: g.url, branch: g.branch, token: g.token, username: g.username, authorName: g.authorName, authorEmail: g.authorEmail });
+    const repo = new GitRepo({ dir, url: g.url, branch: g.branch, token: g.token, username: g.username, ssh: ctx.ssh, authorName: g.authorName, authorEmail: g.authorEmail });
     const store = new KnowledgeStore({ repo, subdir: g.subdir, autoPush: g.autoPush !== false, logger });
     await store.init();
     if (ctx.store) await ctx.store.flushLazy().catch(() => {});
@@ -111,7 +114,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   await srv.listen(port);
   const g = srv.ctx.store.repo.status;
   console.log(`[knowledge] 服務已啟動：http://localhost:${port}`);
-  console.log(`[knowledge] 知識倉庫：${g.remote || '本地倉庫（未配置遠端）'} · 分支 ${g.branch} · 目錄 ${srv.ctx.store.repo.dir}`);
+  console.log(`[knowledge] 知識倉庫：${g.remote || '本地倉庫（未配置遠端）'} · 分支 ${g.branch} · 認證 ${srv.ctx.store.repo.authMode()} · 目錄 ${srv.ctx.store.repo.dir}`);
   console.log(`[knowledge] 智能體教程：http://localhost:${port}/api/v1/prompt`);
   if (srv.ctx.settings.generatedAdminPassword) console.log(`[knowledge] 初始管理員密碼：${srv.ctx.settings.generatedAdminPassword}`);
   const shutdown = async () => { await srv.close(); process.exit(0); };
