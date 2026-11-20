@@ -626,7 +626,7 @@ export class KnowledgeStore {
     this.assertCanContribute(principal);
     const name = clean(input.name);
     if (!name) throw new RuleError(tr('主體名稱必填'), 400, 'invalid_input');
-    if (!SUBJECT_TYPES[input.type]) throw new RuleError(tr('主體類型必須為：{list}', { list: Object.keys(SUBJECT_TYPES).join('、') }), 400, 'invalid_type');
+    if (!SUBJECT_TYPES[input.type]) throw new RuleError(tr('主體類型必須為：{list}', { list: Object.keys(SUBJECT_TYPES).join(tr('、')) }), 400, 'invalid_type');
     const dup = [...this.subjects.values()].find(s => s.name.toLowerCase() === name.toLowerCase());
     if (dup) throw new RuleError(tr('名稱「{name}」已被 {id}（{type}）使用；同名概念請用別名或更精確的規範名', { name, id: dup.id, type: dup.type }), 409, 'duplicate_name');
     const domainCode = clean(input.domain) || this.config.domains[0]?.code || 'GEN';
@@ -696,7 +696,7 @@ export class KnowledgeStore {
     this.assertCanContribute(principal);
     const name = clean(input.name);
     if (!name) throw new RuleError(tr('客體名稱必填'), 400, 'invalid_input');
-    if (!OBJECT_CATEGORIES[input.category]) throw new RuleError(tr('客體類別必須為：{list}', { list: Object.keys(OBJECT_CATEGORIES).join('、') }), 400, 'invalid_category');
+    if (!OBJECT_CATEGORIES[input.category]) throw new RuleError(tr('客體類別必須為：{list}', { list: Object.keys(OBJECT_CATEGORIES).join(tr('、')) }), 400, 'invalid_category');
     const locator = clean(input.locator) || null;
     if (locator) {
       const dup = [...this.objects.values()].find(o => o.category === input.category && o.locator === locator && o.status !== '下線');
@@ -800,7 +800,7 @@ export class KnowledgeStore {
     this.assertCanContribute(principal);
     const s = this.getSubject(subjectId);
     if (s.type === '別名') throw new RuleError(tr('別名主體自身不掛客體、斷言或其他關係；請把斷言掛在規範主體上'), 422, 'alias_rule');
-    if (!ASSERTION_TYPES[input.type]) throw new RuleError(tr('斷言類型必須為：{list}', { list: Object.keys(ASSERTION_TYPES).join('、') }), 400, 'invalid_type');
+    if (!ASSERTION_TYPES[input.type]) throw new RuleError(tr('斷言類型必須為：{list}', { list: Object.keys(ASSERTION_TYPES).join(tr('、')) }), 400, 'invalid_type');
     const content = clean(input.content);
     if (!content) throw new RuleError(tr('斷言內容必填（自然語言一句話）'), 400, 'invalid_input');
     if ((content.match(/[。；;]/g) || []).length > 1) t.warn(tr('一條斷言只說一件事；內容看起來包含多個陳述，建議拆分以便單獨驗證、單獨失效'));
@@ -849,7 +849,7 @@ export class KnowledgeStore {
   createRelation(t, input, principal) {
     this.assertCanContribute(principal);
     const def = RELATION_TYPES[input.type];
-    if (!def) throw new RuleError(tr('關係類型必須為閉集之一：{list}；新增類型須經負責人評審', { list: Object.keys(RELATION_TYPES).join('、') }), 400, 'invalid_relation_type');
+    if (!def) throw new RuleError(tr('關係類型必須為閉集之一：{list}；新增類型須經負責人評審', { list: Object.keys(RELATION_TYPES).join(tr('、')) }), 400, 'invalid_relation_type');
     const from = this.getSubject(input.from);
     const to = this.getSubject(input.to);
     if (from.id === to.id) throw new RuleError(tr('關係的起點與終點不能相同'), 422, 'self_relation');
@@ -1077,7 +1077,7 @@ export class KnowledgeStore {
   // ---------------------------------------------------------------- Action 與管道
   upsertPipeline(t, input, principal) {
     this.assertOwner(principal);
-    if (!PIPELINE_TYPES[input.type]) throw new RuleError(tr('管道類型必須為：{list}', { list: Object.keys(PIPELINE_TYPES).join('、') }), 400);
+    if (!PIPELINE_TYPES[input.type]) throw new RuleError(tr('管道類型必須為：{list}', { list: Object.keys(PIPELINE_TYPES).join(tr('、')) }), 400);
     if (!clean(input.name)) throw new RuleError(tr('管道名稱必填'), 400);
     if (input.type === 'http' && !/^https?:\/\//.test(input.baseUrl || '')) throw new RuleError(tr('http 管道需要 baseUrl（http/https）'), 400);
     for (const v of Object.values(input.headers || {})) if (/^(bearer|basic)\s+[a-z0-9._-]{12,}/i.test(String(v)) && !String(v).includes('${env:')) throw new RuleError(tr('請勿把憑證明文寫入知識倉庫；使用 ${env:變數名} 引用環境變數'), 400, 'secret_in_repo');

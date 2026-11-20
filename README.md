@@ -166,6 +166,18 @@ curl -s -X POST http://localhost:8080/api/v1/ask \
 
 `/ask` 的 `status`：`answered`、`ambiguous`（別名多義，帶 `subjectIds` 重問）、`need_inputs`（動態值缺參數）、`uncovered`（未收錄，已記為知識缺口）。每條引用都帶層級；OpenRouter 返回的引用會與知識範圍比對，範圍外的 ID 被丟棄。
 
+## 多語言（繁體中文 / 簡體中文 / English）
+
+- **管理後台**：按瀏覽器語言自動選擇（`zh-TW`、`zh-HK` 等用繁體，其他中文用簡體，其餘用英文），頂欄、登入頁和「設定 › 帳號」都可以切換，選擇記在瀏覽器裡；網址加 `?lang=en` 可直接指定。
+- **API**：錯誤訊息、提示（`warnings`）、`/schema` 與 OpenAPI 的說明、問答的規則模板答案、智能體教程按 `?lang=zh-TW|zh-CN|en` 或 `Accept-Language` 返回，回應帶 `Content-Language`。都沒有時用 `KNOWLEDGE_LANG`（預設繁體中文）。錯誤碼（`error.code`）不隨語言變化。
+- **不翻譯的部分**：主體類型、客體類別、斷言類型、關係類型、Action 種類、客體狀態等**枚舉值是 API 的值**，任何語言下都用繁體原文（例如 `"type": "指標"`）；`/schema` 另給出 `label` 譯名供顯示。寫入知識倉庫的內容（提交說明、層級歷史、預設的處理結果）一律保持繁體原文，避免倉庫內容隨提交者的語言變化，後台顯示時再翻譯。知識內容本身（名稱、定義、斷言）按提交時的原文保存，不做翻譯。
+- **字典**：繁體原文就是字典鍵。後台字典在 `web/assets/locales/`，服務端字典在 `src/i18n/locales/`。新增或修改介面、訊息文字後執行 `npm run i18n:check`，它會列出缺少、多餘和佔位符不一致的條目（測試中也會檢查）。
+
+```bash
+curl -s 'http://localhost:8080/api/v1/prompt?lang=en'               # 英文教程
+curl -s -H 'Accept-Language: zh-CN' http://localhost:8080/api/v1/schema  # 簡體說明
+```
+
 ## CI 與發佈
 
 `.github/workflows/` 下兩條流水綫：
@@ -190,7 +202,8 @@ git tag v0.2.0 && git push origin v0.2.0  # 標籤必須與 package.json 一致�
 
 ```bash
 npm run dev     # 監聽修改自動重啟
-npm test        # 29 項：模型規則 + 端到端（含 OpenRouter 模擬、Git 遠端推送與回拉、經本機 sshd 的 SSH 部署金鑰；沒有 sshd 時該項跳過）
+npm test        # 37 項：模型規則 + 端到端（含 OpenRouter 模擬、Git 遠端推送與回拉、經本機 sshd 的 SSH 部署金鑰、多語言；沒有 OpenSSH 時相關項跳過）
+npm run i18n:check # 檢查簡中、英文字典是否覆蓋全部介面與訊息文字
 npm run seed    # 命令列載入示例資料
 npm run ssh-key # 顯示 SSH 部署金鑰的公鑰（沒有時產生）
 ```
