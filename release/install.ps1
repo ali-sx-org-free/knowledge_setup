@@ -36,10 +36,11 @@ if ($env:KNOWLEDGE_FORCE_NODE) { $ForceNode = $true }
 if ($env:KNOWLEDGE_FORCE_GIT) { $ForceGit = $true }
 
 # 下載來源。第一個是官方來源：可達時以它的校驗清單為準。
+# 一律用 @() 包住：函數只返回一個元素時 PowerShell 會把陣列拆成單個字串，之後按序號取到的會是字元。
 function Split-List([string]$s) { @($s -split '[\s,]+' | Where-Object { $_ }) }
-$GithubMirrors = Split-List $(if ($Mirror) { $Mirror } elseif ($env:KNOWLEDGE_GITHUB_MIRRORS) { $env:KNOWLEDGE_GITHUB_MIRRORS } else { 'https://github.com https://ghfast.top/https://github.com https://gh-proxy.com/https://github.com https://ghproxy.net/https://github.com https://gh.llkk.cc/https://github.com' })
-$NodeMirrors = Split-List $(if ($NodeMirror) { $NodeMirror } elseif ($env:KNOWLEDGE_NODE_MIRRORS) { $env:KNOWLEDGE_NODE_MIRRORS } else { 'https://nodejs.org/dist https://registry.npmmirror.com/-/binary/node https://mirrors.tuna.tsinghua.edu.cn/nodejs-release https://mirrors.ustc.edu.cn/node https://repo.huaweicloud.com/nodejs https://mirrors.cloud.tencent.com/nodejs-release https://mirrors.aliyun.com/nodejs-release' })
-$NpmRegistries = Split-List $(if ($Registry) { $Registry } elseif ($env:KNOWLEDGE_NPM_REGISTRIES) { $env:KNOWLEDGE_NPM_REGISTRIES } else { 'https://registry.npmjs.org https://registry.npmmirror.com https://mirrors.cloud.tencent.com/npm https://repo.huaweicloud.com/repository/npm' })
+$GithubMirrors = @(Split-List $(if ($Mirror) { $Mirror } elseif ($env:KNOWLEDGE_GITHUB_MIRRORS) { $env:KNOWLEDGE_GITHUB_MIRRORS } else { 'https://github.com https://ghfast.top/https://github.com https://gh-proxy.com/https://github.com https://ghproxy.net/https://github.com https://gh.llkk.cc/https://github.com' }))
+$NodeMirrors = @(Split-List $(if ($NodeMirror) { $NodeMirror } elseif ($env:KNOWLEDGE_NODE_MIRRORS) { $env:KNOWLEDGE_NODE_MIRRORS } else { 'https://nodejs.org/dist https://registry.npmmirror.com/-/binary/node https://mirrors.tuna.tsinghua.edu.cn/nodejs-release https://mirrors.ustc.edu.cn/node https://repo.huaweicloud.com/nodejs https://mirrors.cloud.tencent.com/nodejs-release https://mirrors.aliyun.com/nodejs-release' }))
+$NpmRegistries = @(Split-List $(if ($Registry) { $Registry } elseif ($env:KNOWLEDGE_NPM_REGISTRIES) { $env:KNOWLEDGE_NPM_REGISTRIES } else { 'https://registry.npmjs.org https://registry.npmmirror.com https://mirrors.cloud.tencent.com/npm https://repo.huaweicloud.com/repository/npm' }))
 
 # MinGit（只在沒有 git 時下載）：固定版本與 SHA-256，任何鏡像下載的都能校驗。
 $MinGitVersion = if ($env:KNOWLEDGE_MINGIT_VERSION) { $env:KNOWLEDGE_MINGIT_VERSION } else { '2.56.1' }
@@ -47,7 +48,7 @@ $MinGitSha256 = @{
   '64-bit' = '4a92850b6e917da4fd010669b614b55dccf5b0ec333a534cc4be4700dfefdafd'
   'arm64'  = '96571e442e90523a90e5fd8661b4c4e43bc192910f3c6db938816e6955b4cc8c'
 }
-$MinGitMirrors = if ($env:KNOWLEDGE_MINGIT_MIRRORS) { Split-List $env:KNOWLEDGE_MINGIT_MIRRORS } else { @('https://registry.npmmirror.com/-/binary/git-for-windows', 'https://repo.huaweicloud.com/git-for-windows') }
+$MinGitMirrors = @(if ($env:KNOWLEDGE_MINGIT_MIRRORS) { Split-List $env:KNOWLEDGE_MINGIT_MIRRORS } else { @('https://registry.npmmirror.com/-/binary/git-for-windows', 'https://repo.huaweicloud.com/git-for-windows') })
 
 # 測速參數：每個來源下載前 ProbeBytes 字節，最多 ProbeTime 秒。
 $ProbeBytes = if ($env:KNOWLEDGE_PROBE_BYTES) { [int]$env:KNOWLEDGE_PROBE_BYTES } else { 524288 }
@@ -120,7 +121,7 @@ function Get-SumsFromAll([string]$tag, [string[]]$urls, [string]$pattern) {
   $procs = @()
   for ($i = 0; $i -lt $urls.Count; $i++) {
     $dest = Join-Path $Tmp "$tag.sums.$i"
-    $curlArgs = "-fsSL --connect-timeout $ConnectTimeout -m $SumsTime -o `"$dest`" `"$($urls[$i])`""
+    $curlArgs = "-fsL --connect-timeout $ConnectTimeout -m $SumsTime -o `"$dest`" `"$($urls[$i])`""
     $procs += Start-Process -FilePath $Curl -ArgumentList $curlArgs -NoNewWindow -PassThru
   }
   foreach ($p in $procs) { $p.WaitForExit() }
