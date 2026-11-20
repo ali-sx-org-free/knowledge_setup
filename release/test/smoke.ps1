@@ -21,15 +21,19 @@ $OrigUserPath = $EnvKey.GetValue('Path', $null, [Microsoft.Win32.RegistryValueOp
 function Assert([bool]$cond, [string]$msg) { if (-not $cond) { throw "FAIL: $msg" } }
 
 function Start-Mirror([string]$name, [string[]]$extra) {
-  $out = Join-Path $Work "$name.port"
-  $argList = @("`"$Root\release\test\mirror-server.js`"", '--dir', "`"$Dist`"") + $extra
-  $p = Start-Process -FilePath node -ArgumentList $argList -RedirectStandardOutput $out -RedirectStandardError "$out.err" -WindowStyle Hidden -PassThru
+  $portFile = Join-Path $Work "$name.port"
+  $log = Join-Path $Work "$name.log"
+  $argList = @("`"$Root\release\test\mirror-server.js`"", '--dir', "`"$Dist`"", '--port-file', "`"$portFile`"") + $extra
+  $p = Start-Process -FilePath node -ArgumentList $argList -RedirectStandardOutput $log -RedirectStandardError "$log.err" -WindowStyle Hidden -PassThru
   $script:Mirrors += $p
-  for ($i = 0; $i -lt 100; $i++) {
-    try { if ((Test-Path -LiteralPath $out) -and ([System.IO.File]::ReadAllText($out) -match 'listening (\d+)')) { return [int]$Matches[1] } } catch {}
+  for ($i = 0; $i -lt 150; $i++) {
+    if (Test-Path -LiteralPath $portFile) { return [int]([System.IO.File]::ReadAllText($portFile)).Trim() }
+    if ($p.HasExited) { break }
     Start-Sleep -Milliseconds 100
   }
-  throw "模擬來源 $name 沒有啟動"
+  $err = ''
+  try { $err = Get-Content -LiteralPath "$log.err" -Raw -ErrorAction SilentlyContinue } catch {}
+  throw "模擬來源 $name 沒有啟動（退出碼 $(if ($p.HasExited) { $p.ExitCode } else { '仍在運行' })）：$err"
 }
 
 function Get-FreePort {

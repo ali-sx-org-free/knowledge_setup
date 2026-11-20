@@ -28,7 +28,19 @@ cleanup() {
 }
 trap cleanup EXIT
 
-fail() { echo "FAIL: $*" >&2; [ -f "$WORK/install.log" ] && tail -n 60 "$WORK/install.log" >&2; exit 1; }
+fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# run_install <日誌檔> <install.sh 參數>...：執行安裝腳本，輸出同時寫入日誌；退出碼不為 0 時失敗
+run_install() {
+  local log="$1" rc
+  shift
+  set +e
+  bash "$DIST/install.sh" "$@" > "$log" 2>&1
+  rc=$?
+  set -e
+  cat "$log"
+  [ "$rc" = 0 ] || fail "install.sh 退出碼 $rc"
+}
 
 # start_mirror <名稱> [mirror-server 參數]：啟動模擬來源，端口寫入 MIRROR_PORT
 start_mirror() {
@@ -57,10 +69,9 @@ fi
 VERSION="$(sed -n 's/.*  knowledge_setup-\(v[^ ]*\)\.tar\.gz$/\1/p' "$DIST/SHA256SUMS")"
 
 echo "== 1. 首次安裝（期望：選中 corrupt → 校驗失敗 → 回退 good）"
-bash "$DIST/install.sh" --prefix "$PREFIX" --port "$APP_PORT" "${EXTRA[@]+"${EXTRA[@]}"}" 2>&1 | tee "$WORK/install.log"
-[ "${PIPESTATUS[0]}" = 0 ] || fail "install.sh 失敗"
+run_install "$WORK/install.log" --prefix "$PREFIX" --port "$APP_PORT" "${EXTRA[@]+"${EXTRA[@]}"}"
 grep -q "SHA-256 校驗失敗（來源 127.0.0.1:$CORRUPT" "$WORK/install.log" || fail "沒有拒絕被篡改的發佈包"
-grep -q "下載發佈包 $VERSION（來源 127.0.0.1:$GOOD）" "$WORK/install.log" || fail "沒有回退到正常來源"
+grep -q "下載發佈包 ${VERSION}（來源 127.0.0.1:${GOOD}）" "$WORK/install.log" || fail "沒有回退到正常來源"
 if grep -q "127.0.0.1:1 .*無法連接" "$WORK/install.log"; then fail "不可達來源不應進入測速（取 SHA256SUMS 時已排除）"; fi
 grep -q "已啟動" "$WORK/install.log" || fail "服務沒有啟動"
 grep -q "不可用（已跳過）：127.0.0.1:1$" "$WORK/install.log" || fail "沒有報告不可達的來源"
@@ -75,7 +86,7 @@ curl -fsS "http://127.0.0.1:$APP_PORT/api/v1/prompt" -o /dev/null || fail "/api/
 PW="$("$PREFIX/bin/knowledge" password)"
 [ -n "$PW" ] || fail "沒有初始密碼"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d "{\"password\":\"$PW\"}" "http://127.0.0.1:$APP_PORT/admin/api/login")
-[ "$code" = 200 ] || fail "初始密碼登入失敗（HTTP $code）"
+[ "$code" = 200 ] || fail "初始密碼登入失敗（HTTP ${code}）"
 knowledge status | tee "$WORK/status.log"
 grep -q "運行中" "$WORK/status.log" || fail "status 不是運行中"
 if [ -n "${SMOKE_REAL_NODE:-}" ]; then grep -q "runtime/node/bin/node" "$WORK/status.log" || fail "沒有使用獨立的 Node.js"; fi
@@ -83,21 +94,21 @@ if [ -n "${SMOKE_REAL_NODE:-}" ]; then grep -q "runtime/node/bin/node" "$WORK/st
 
 echo "== 3. 再次執行：已是最新版本，服務保持運行"
 PID_BEFORE="$(cat "$PREFIX/run/knowledge.pid")"
-bash "$DIST/install.sh" --prefix "$PREFIX" 2>&1 | tee "$WORK/install2.log"
+run_install "$WORK/install2.log" --prefix "$PREFIX"
 grep -q "已是最新版本 $VERSION" "$WORK/install2.log" || fail "沒有識別已是最新版本"
 [ "$(cat "$PREFIX/run/knowledge.pid")" = "$PID_BEFORE" ] || fail "不應重啟服務"
 
 echo "== 4. --force 重裝：停止 → 替換程式 → 啟動，資料與設定保留"
 echo "# smoke-marker" >> "$PREFIX/config.env"
-bash "$DIST/install.sh" --prefix "$PREFIX" --force --mirror "http://127.0.0.1:$GOOD" 2>&1 | tee "$WORK/install3.log"
+run_install "$WORK/install3.log" --prefix "$PREFIX" --force --mirror "http://127.0.0.1:$GOOD"
 grep -q "停止正在運行的舊版本" "$WORK/install3.log" || fail "沒有先停止舊版本"
 grep -q "smoke-marker" "$PREFIX/config.env" || fail "config.env 被覆蓋"
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'content-type: application/json' -d "{\"password\":\"$PW\"}" "http://127.0.0.1:$APP_PORT/admin/api/login")
-[ "$code" = 200 ] || fail "重裝後原密碼登入失敗（資料沒有保留？HTTP $code）"
+[ "$code" = 200 ] || fail "重裝後原密碼登入失敗（資料沒有保留？HTTP ${code}）"
 
 echo "== 5. 從本地發佈包安裝（離線）"
 "$PREFIX/bin/knowledge" stop
-bash "$DIST/install.sh" --prefix "$WORK/offline" --package "$DIST/knowledge_setup-$VERSION.tar.gz" --no-start 2>&1 | tee "$WORK/install4.log"
+run_install "$WORK/install4.log" --prefix "$WORK/offline" --package "$DIST/knowledge_setup-$VERSION.tar.gz" --no-start
 grep -q "SHA-256 校驗通過" "$WORK/install4.log" || fail "本地發佈包沒有校驗"
 [ -f "$WORK/offline/app/src/server.js" ] || fail "本地發佈包沒有安裝"
 

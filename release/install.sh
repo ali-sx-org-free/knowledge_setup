@@ -79,7 +79,7 @@ while [ $# -gt 0 ]; do
     --force) FORCE=1; shift ;;
     --no-start) START=""; shift ;;
     -h|--help) usage; exit 0 ;;
-    *) die "未知選項：$1（--help 查看用法）" ;;
+    *) die "未知選項：${1}（--help 查看用法）" ;;
   esac
 done
 
@@ -168,7 +168,7 @@ EOF
     elif [ "$code" = 000 ]; then
       info "$(printf '%-28s %s' "$(label_of "$u")" "無法連接")"
     else
-      info "$(printf '%-28s %s' "$(label_of "$u")" "不可用（HTTP $code）")"
+      info "$(printf '%-28s %s' "$(label_of "$u")" "不可用（HTTP ${code}）")"
     fi
     i=$((i + 1))
   done
@@ -185,7 +185,7 @@ fastest_download() {
   rank_urls "$what" "$@" || return 1
   for i in $RANKED; do
     u="${urls[$i]}"
-    say "下載$what（來源 $(label_of "$u")）"
+    say "下載${what}（來源 $(label_of "$u")）"
     rm -f "$dest"
     if ! curl -fL $PROGRESS --connect-timeout "$CONNECT_TIMEOUT" --speed-limit 2048 --speed-time 30 --retry 2 -o "$dest" "$u"; then
       warn "從 $(label_of "$u") 下載失敗，換下一個來源"
@@ -194,7 +194,7 @@ fastest_download() {
     if [ -n "$sha" ]; then
       got="$(sha256_of "$dest")"
       if [ "$got" != "$sha" ]; then
-        warn "SHA-256 校驗失敗（來源 $(label_of "$u")：期望 $sha，實際 $got），換下一個來源"
+        warn "SHA-256 校驗失敗（來源 $(label_of "$u")：期望 ${sha}，實際 ${got}），換下一個來源"
         continue
       fi
       info "SHA-256 校驗通過"
@@ -225,7 +225,7 @@ ensure_node() {
   fi
   if [ -z "$FORCE_NODE" ] && command -v node >/dev/null 2>&1 && node_ok node; then
     NODE_BIN="$(command -v node)"
-    info "Node.js $(node -v)（系統已安裝：$NODE_BIN）"
+    info "Node.js $(node -v)（系統已安裝：${NODE_BIN}）"
     return 0
   fi
   if command -v node >/dev/null 2>&1 && [ -z "$FORCE_NODE" ]; then
@@ -296,7 +296,7 @@ fetch_release() {
   local mirrors=("${WORDS[@]}") urls=() m i file sha path
   if [ "$VERSION" = latest ]; then path="/$REPO/releases/latest/download/SHA256SUMS"; else path="/$REPO/releases/download/$VERSION/SHA256SUMS"; fi
   for m in "${mirrors[@]}"; do urls+=("${m%/}$path"); done
-  say "取得發佈資訊（$REPO · $VERSION）"
+  say "取得發佈資訊（$REPO · ${VERSION}）"
   fetch_sums gh '^[0-9a-f]{64} [ *]knowledge_setup-v[^ ]+\.tar\.gz$' "${urls[@]}" \
     || die "所有來源都取不到 $VERSION 的發佈資訊。可能還沒有發佈版本（可用 --ref main 從源碼安裝），或網絡不通（可用 --mirror 指定可用的 GitHub 代理）"
   [ "$SUMS_REF" = 0 ] || warn "無法直接訪問 $(label_of "${mirrors[0]}")，校驗值取自 $(label_of "${mirrors[$SUMS_REF]}")"
@@ -305,7 +305,7 @@ fetch_release() {
   sha="$(sums_hash "$SUMS_FILE" "$file")"
   info "版本 $NEW_VERSION"
   if [ -z "$FORCE" ] && [ "$(installed_version)" = "$NEW_VERSION" ]; then
-    info "已是最新版本 $NEW_VERSION（重新安裝請加 --force）"
+    info "已是最新版本 ${NEW_VERSION}（重新安裝請加 --force）"
     return 0
   fi
   urls=()
@@ -330,7 +330,7 @@ fetch_local_package() {
   unpack_app "$LOCAL_PACKAGE"
   NEW_VERSION="$(cat "$NEW_APP/VERSION" 2>/dev/null || echo unknown)"
   if [ -z "$FORCE" ] && [ "$(installed_version)" = "$NEW_VERSION" ]; then
-    info "已是版本 $NEW_VERSION（重新安裝請加 --force）"
+    info "已是版本 ${NEW_VERSION}（重新安裝請加 --force）"
     NEW_APP=""
   fi
 }
@@ -449,7 +449,7 @@ main() {
 
   echo
   if [ -n "$LINKED" ]; then
-    info "命令：knowledge start | stop | restart | status | logs | upgrade（已連結到 $LINKED）"
+    info "命令：knowledge start | stop | restart | status | logs | upgrade（已連結到 ${LINKED}）"
   else
     info "命令：$PREFIX/bin/knowledge start | stop | restart | status | logs | upgrade"
     info "想直接輸入 knowledge，把下面這行加入 ~/.bashrc 或 ~/.zshrc："

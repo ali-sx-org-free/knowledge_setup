@@ -4,7 +4,7 @@
 // /releases/latest/download/<file> 視為最新版本。支持 Range（測速只取前幾百 KB）。
 //   --throttle N  限速 N 字節/秒（模擬慢鏡像）
 //   --corrupt     發佈包內容被篡改（SHA256SUMS 正常），用來驗證安裝腳本的校驗與回退
-// 啟動後在標準輸出打印一行 "listening <port>"。
+// 啟動後在標準輸出打印一行 "listening <port>"；給了 --port-file 時另把端口寫入該檔（Windows 上讀被重定向中的輸出檔可能被鎖）。
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -18,6 +18,7 @@ const dir = path.resolve(opt('dir') || 'dist');
 const port = Number(opt('port') || 0);
 const throttle = Number(opt('throttle') || 0);
 const corrupt = !!opt('corrupt');
+const portFile = opt('port-file');
 
 const ROUTE = /^\/(?:https?:\/\/github\.com\/)?[^/]+\/[^/]+\/releases\/(?:latest\/download|download\/[^/]+)\/([^/]+)$/;
 
@@ -74,5 +75,10 @@ const server = http.createServer((req, res) => {
 });
 
 server.listen(port, '127.0.0.1', () => {
-  console.log(`listening ${server.address().port}`);
+  const actual = server.address().port;
+  if (typeof portFile === 'string') {
+    fs.writeFileSync(`${portFile}.tmp`, String(actual));
+    fs.renameSync(`${portFile}.tmp`, portFile);
+  }
+  console.log(`listening ${actual}`);
 });

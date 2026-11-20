@@ -74,7 +74,7 @@ show_access() {
   elif [ -f "$DATA_DIR/initial-admin-password.txt" ]; then
     info "初始管理員密碼：$(cat "$DATA_DIR/initial-admin-password.txt")（登入後可在「設定」修改，修改後以新密碼為準）"
   fi
-  info "設定檔：$CONFIG（修改後 knowledge restart）"
+  info "設定檔：${CONFIG}（修改後 knowledge restart）"
   info "日誌：$LOG"
 }
 
@@ -113,7 +113,7 @@ start_service() {
     rm -f "$PIDFILE"
     exit 1
   fi
-  say "knowledge_setup $(version) 已啟動（PID $p）"
+  say "knowledge_setup $(version) 已啟動（PID ${p}）"
   show_access
 }
 
