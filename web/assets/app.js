@@ -35,7 +35,8 @@ const NAV = {
     ] },
     { id: 'runtime', name: t('動力層'), en: 'RUNTIME', icon: 'bolt', pages: [
       { id: 'actions', name: 'Action', desc: t('對某類客體的一次只讀管道交互：校驗（結果寫回有效性）與取值（實時讀取動態值）。') },
-      { id: 'pipelines', name: t('nav|管道'), icon: 'plug', desc: t('到數據源的連接；憑證以 ${env:變數} 引用，不寫入知識倉庫。') }
+      { id: 'pipelines', name: t('nav|管道'), icon: 'plug', aliases: ['scenes'], desc: t('到數據源的連接；憑證以 ${env:變數} 引用，不寫入知識倉庫。') },
+      { id: 'executions', name: t('執行記錄'), icon: 'list', desc: t('RPA 校驗的異步執行：受理、排隊、執行、判定與寫回。記錄存在服務本地，不進知識倉庫。') }
     ] },
     { id: 'integration', name: t('接入'), en: 'INTEGRATION', icon: 'plug', pages: [
       { id: 'playground', name: t('問答測試'), desc: t('模擬智能體調用消費型 API：結構化知識 + 自然語言答案。') },
@@ -117,9 +118,10 @@ function rowOps(id, lvl, { full = false } = {}) {
 
 // ------------------------------------------------------------------ 條目操作（事件委派）
 const OPS = {
-  async validate(id) {
-    const r = await post(`/api/v1/validate/${id}`);
+  async validate(id, data = {}) {
+    const r = await post(`/api/v1/validate/${id}`, data.action ? { actionId: data.action } : {});
     const d = r.data;
+    if (d.executionId) return watchExecution(d.executionId, d.deduped ? t('{id} 已有進行中的校驗', { id }) : t('校驗 {id}（RPA）', { id }));
     const outcome = { pass: t('通過 → L0'), mismatch: t('不符 → L1'), missing: t('客體不存在 → 下線'), error: t('無法完成') }[d.outcome] || d.outcome;
     toast(t('{id} 校驗結果：{outcome}。{detail}', { id, outcome, detail: td(d.detail) || '' }), 6000);
     render();
@@ -406,10 +408,14 @@ PAGES.item = async ({ param: id }) => {
       <dt>${t('有效期至')}</dt><dd>${fmtTime(v.expiresAt)}</dd>
       <dt>${t('來源')}</dt><dd>${esc(v.source ? `${v.source.name || v.source.id}（${mapText(SOURCE_KIND, v.source.kind)}）` : '—')}</dd>
       ${v.lastCheck ? `<dt>${t('最近校驗')}</dt><dd>${esc(v.lastCheck.actionId)} · ${esc(mapText(OUTCOME_TEXT, v.lastCheck.outcome))} · ${fmtTime(v.lastCheck.at)}<span class="cell-sub">${esc(td(v.lastCheck.detail) || '')}</span></dd>` : ''}
+      ${v.lastCheck?.rpa ? `<dt>${t('RPA 證據')}</dt><dd>${runLink(v.lastCheck.rpa)} · ${esc(v.lastCheck.rpa.sceneId)} v${esc(v.lastCheck.rpa.revision)}${v.lastCheck.rpa.workerId ? ` · Worker ${esc(v.lastCheck.rpa.workerId)}` : ''}<span class="cell-sub">${evidenceSummary(v.lastCheck.rpa)}</span><span class="cell-sub">${esc(t('執行 {id}', { id: v.lastCheck.executionId || '' }))}</span></dd>` : ''}
       ${v.level === 'E1' ? `<dt>${t('失效原因')}</dt><dd>${esc(td(v.invalidReason) || '—')}</dd><dt>${t('替代者')}</dt><dd>${v.replacedBy ? idLink(v.replacedBy) : '—'}</dd>` : ''}
     </dl></div>`)}
     ${panel(t('操作'), `<div class="panel-body">${rowOps(id, v.level, { full: true })}<p class="muted" style="margin-top:8px;font-size:12px">${t('上行只有兩條路：補充證據（L2 → L1），以及校驗或確認（L1 → L0）。智能體不能晉升知識。')}</p></div>`)}
-  </div><div>${panel(t('層級歷史'), `<div class="panel-body"><ul class="timeline">${[...(v.history || [])].reverse().map(h => `<li><strong>${esc(h.from || t('新建'))} → ${esc(h.to)}</strong> ${esc(td(h.reason) || '')}<span class="cell-sub">${esc(h.by || '')} · ${fmtTime(h.at)}${h.note ? ' · ' + esc(td(h.note)) : ''}</span></li>`).join('') || `<li>${t('無')}</li>`}</ul></div>`)}</div></div>`;
+  </div><div class="stack">${panel(t('層級歷史'), `<div class="panel-body"><ul class="timeline">${[...(v.history || [])].reverse().map(h => `<li><strong>${esc(h.from || t('新建'))} → ${esc(h.to)}</strong> ${esc(td(h.reason) || '')}<span class="cell-sub">${esc(h.by || '')} · ${fmtTime(h.at)}${h.note ? ' · ' + esc(td(h.note)) : ''}</span></li>`).join('') || `<li>${t('無')}</li>`}</ul></div>`)}<div id="item-execs"></div></div></div>`;
+  get(`/api/v1/action-executions?${qs({ itemId: id, limit: 10 })}`).then(list => {
+    if (list.length) $('#item-execs').innerHTML = panel(t('RPA 執行記錄'), executionTable(list, { item: false }));
+  }).catch(() => {});
 };
 
 PAGES.assertions = async () => {
@@ -572,18 +578,205 @@ function jsonDialog(title, value, save) {
 PAGES.actions = async () => {
   const [list, pipelines] = await Promise.all([get('/api/v1/actions'), get('/api/v1/pipelines')]);
   setActions(isOwner() ? `<button class="button primary" id="add-action">${t('新增 Action')}</button>` : '');
-  content().innerHTML = panel(t('Action（{n}）', { n: list.length }), table(['ID', t('名稱'), t('種類'), t('管道'), t('請求'), t('輸入 / 輸出'), t('調用權限'), t('操作')], list.map(a => `<tr><td>${tag(a.id)}</td><td class="wrap">${esc(a.name)}<span class="cell-sub">${esc(a.description || '')}</span></td><td>${vpill(a.kind, a.kind === '校驗' ? 'blue' : 'green', 'act')}${a.check ? `<span class="cell-sub">${esc(a.check.mode)}</span>` : ''}</td><td>${esc(pipelines.find(p => p.id === a.pipelineId)?.name || a.pipelineId)}</td><td class="mono wrap">${esc(a.request.method)} ${esc(a.request.path)}</td><td class="wrap">${(a.inputs || []).map(i => tag(i.name)).join(' ') || '—'}${a.output?.path ? `<span class="cell-sub">${esc(t('輸出 {path}', { path: a.output.path }))}</span>` : ''}</td><td>${esc(a.permission)}</td><td><div class="cell-actions">${a.kind === '取值' ? `<button class="text-btn" data-op="invoke" data-id="${esc(a.id)}">${t('調用')}</button>` : ''}${isOwner() ? `<button class="text-btn edit-action" data-id="${esc(a.id)}">${t('編輯')}</button>` : ''}</div></td></tr>`), t('尚無 Action')));
+  const req = a => (a.rpa ? `RPA ${esc(a.rpa.sceneId)} v${esc(a.rpa.revision)}<span class="cell-sub">${a.enabled === false ? pill(t('未啟用'), 'amber') : a.review?.readOnly ? esc(t('已審閱只讀 · {by}', { by: a.review.by || '' })) : pill(t('未審閱'), 'amber')}</span>` : `${esc(a.request.method)} ${esc(a.request.path)}`);
+  const io = a => (a.rpa ? `${Object.keys(a.rpa.inputs || {}).map(tag).join(' ')}<span class="cell-sub">${esc(t('守衛 {outputs}', { outputs: (a.check?.expect || []).map(e => e.output).join(t('、')) }))}</span>` : `${(a.inputs || []).map(i => tag(i.name)).join(' ') || '—'}${a.output?.path ? `<span class="cell-sub">${esc(t('輸出 {path}', { path: a.output.path }))}</span>` : ''}`);
+  const ops = a => [
+    a.kind === '取值' && !a.rpa ? `<button class="text-btn" data-op="invoke" data-id="${esc(a.id)}">${t('調用')}</button>` : '',
+    a.rpa && isOwner() ? `<button class="text-btn" data-op="previewAction" data-id="${esc(a.id)}">${t('預覽')}</button><button class="text-btn" data-op="reviewAction" data-id="${esc(a.id)}">${t('審閱')}</button>` : '',
+    a.rpa ? `<a class="text-btn" href="#executions/${esc(a.id)}">${t('記錄')}</a>` : '',
+    isOwner() ? `<button class="text-btn edit-action" data-id="${esc(a.id)}">${t('編輯')}</button>` : ''
+  ].join('');
+  content().innerHTML = panel(t('Action（{n}）', { n: list.length }), table(['ID', t('名稱'), t('種類'), t('管道'), t('請求 / 場景'), t('輸入 / 輸出'), t('調用權限'), t('操作')], list.map(a => `<tr><td>${tag(a.id)}</td><td class="wrap">${esc(a.name)}<span class="cell-sub">${esc(a.description || '')}</span></td><td>${vpill(a.kind, a.kind === '校驗' ? 'blue' : 'green', 'act')}${a.check ? `<span class="cell-sub">${esc(a.check.mode)}</span>` : ''}</td><td>${esc(pipelines.find(p => p.id === a.pipelineId)?.name || a.pipelineId)}</td><td class="mono wrap">${req(a)}</td><td class="wrap">${io(a)}</td><td>${esc(a.permission)}</td><td><div class="cell-actions">${ops(a)}</div></td></tr>`), t('尚無 Action')));
   $('#add-action')?.addEventListener('click', () => jsonDialog(t('新增 Action'), { ...actionTemplate(), pipelineId: pipelines[0]?.id || 'P-0001' }, body => post('/api/v1/actions', body)));
-  $$('.edit-action').forEach(b => (b.onclick = () => { const a = list.find(x => x.id === b.dataset.id); const { id, updatedAt, ...rest } = a; jsonDialog(t('編輯 {id}', { id }), rest, body => put(`/api/v1/actions/${id}`, body)); }));
+  $$('.edit-action').forEach(b => (b.onclick = () => { const a = list.find(x => x.id === b.dataset.id); const { id, updatedAt, inputs, ...rest } = a; jsonDialog(t('編輯 {id}', { id }), a.rpa ? rest : { ...rest, inputs }, body => put(`/api/v1/actions/${id}`, body)); }));
 };
 
 PAGES.pipelines = async () => {
   const list = await get('/api/v1/pipelines');
-  setActions(isOwner() ? `<button class="button primary" id="add-pipeline">${t('新增管道')}</button>` : '');
-  content().innerHTML = `<p class="notice" style="margin-bottom:12px">${t('管道屬於基礎設施，使用者通常只看到 Action。示意（mock）管道按路由返回模板結果；接入真實系統時改為 http 類型。')}</p>${panel(t('管道（{n}）', { n: list.length }), table(['ID', t('名稱'), t('類型'), t('地址 / 路由'), t('說明'), t('操作')], list.map(p => `<tr><td>${tag(p.id)}</td><td>${esc(p.name)}</td><td>${pill(p.type === 'mock' ? t('示意') : 'HTTP', p.type === 'mock' ? 'amber' : 'blue')}</td><td class="mono wrap">${esc(p.type === 'http' ? p.baseUrl : (p.routes || []).map(r => `${r.method || 'GET'} ${r.path}`).join('\n'))}</td><td class="wrap">${esc(p.description || '')}</td><td><div class="cell-actions">${isOwner() ? `<button class="text-btn test-pipe" data-id="${esc(p.id)}">${t('測試')}</button><button class="text-btn edit-pipe" data-id="${esc(p.id)}">${t('編輯')}</button>` : ''}</div></td></tr>`), t('尚無管道')))}`;
+  setActions(isOwner() ? `<button class="button" id="add-rpa-pipeline">${t('新增 RPA 管道')}</button><button class="button primary" id="add-pipeline">${t('新增管道')}</button>` : '');
+  const typeName = { mock: [t('示意'), 'amber'], http: ['HTTP', 'blue'], rpa: ['RPA', 'green'] };
+  content().innerHTML = `<p class="notice" style="margin-bottom:12px">${t('管道屬於基礎設施，使用者通常只看到 Action。示意（mock）管道按路由返回模板結果；接入真實系統時改為 http 類型。')} ${t('RPA 管道對應瀏覽器 RPA 上的一個 API 用戶端，場景範圍與權限由 RPA 管。')}</p>${panel(t('管道（{n}）', { n: list.length }), table(['ID', t('名稱'), t('類型'), t('地址 / 路由'), t('說明'), t('操作')], list.map(p => `<tr><td>${tag(p.id)}</td><td>${esc(p.name)}</td><td>${pill(...(typeName[p.type] || [p.type]))}</td><td class="mono wrap">${esc(p.type === 'mock' ? (p.routes || []).map(r => `${r.method || 'GET'} ${r.path}`).join('\n') : p.baseUrl)}${p.rpa ? `<span class="cell-sub">${esc(t('並發 {n} · 排隊上限 {sec} 秒', { n: p.rpa.maxConcurrent, sec: p.rpa.queueTimeoutSec }))}${p.rpa.target ? ` · ${esc(p.rpa.target)}` : ''}</span>` : ''}</td><td class="wrap">${esc(p.description || '')}</td><td><div class="cell-actions">${isOwner() ? `${p.type === 'rpa' ? `<a class="text-btn" href="#scenes/${esc(p.id)}">${t('場景目錄')}</a>` : ''}<button class="text-btn test-pipe" data-id="${esc(p.id)}">${t('測試')}</button><button class="text-btn edit-pipe" data-id="${esc(p.id)}">${t('編輯')}</button>` : ''}</div></td></tr>`), t('尚無管道')))}`;
   $('#add-pipeline')?.addEventListener('click', () => jsonDialog(t('新增管道'), pipelineTemplate(), body => post('/api/v1/pipelines', body)));
+  $('#add-rpa-pipeline')?.addEventListener('click', () => jsonDialog(t('新增 RPA 管道'), rpaPipelineTemplate(), body => post('/api/v1/pipelines', body)));
   $$('.edit-pipe').forEach(b => (b.onclick = () => { const p = list.find(x => x.id === b.dataset.id); const { id, updatedAt, ...rest } = p; jsonDialog(t('編輯 {id}', { id }), rest, body => put(`/api/v1/pipelines/${id}`, body)); }));
-  $$('.test-pipe').forEach(b => (b.onclick = async () => { const r = await post(`/api/v1/pipelines/${b.dataset.id}/test`); toast(t('{id}：{state}（{detail}）', { id: b.dataset.id, state: r.data.ok ? t('可用') : t('不可用'), detail: r.data.detail }), 5000); }));
+  $$('.test-pipe').forEach(b => (b.onclick = async () => {
+    const r = await post(`/api/v1/pipelines/${b.dataset.id}/test`);
+    if (!r.data.checks) return toast(t('{id}：{state}（{detail}）', { id: b.dataset.id, state: r.data.ok ? t('可用') : t('不可用'), detail: r.data.detail }), 5000);
+    const m = r.data.meta;
+    modal(t('測試 {id}', { id: b.dataset.id }), `<p class="notice ${r.data.ok ? '' : 'warn'}">${esc(r.data.detail)}</p>${checkList(r.data.checks)}${m ? `<dl class="kv" style="margin-top:12px"><dt>${t('API 用戶端')}</dt><dd>${esc(m.client?.name || m.client?.id || '—')}</dd><dt>${t('可用領域')}</dt><dd>${esc(m.domains ? m.domains.join(t('、')) : t('全部'))}</dd><dt>${t('排隊上限')}</dt><dd>${esc(m.limits?.queuedRuns ?? '—')}</dd><dt>${t('執行位置')}</dt><dd>${esc(m.target || '—')}</dd><dt>Worker</dt><dd>${(r.data.workers || []).map(w => `${esc(w.name || w.id)}（${esc(w.status)}）`).join(t('、')) || '—'}</dd></dl>` : ''}`);
+  }));
+};
+
+// ------------------------------------------------------------------ RPA：場景目錄、草稿、審閱、執行記錄
+const rpaPipelineTemplate = () => ({ name: t('RPA（生產）'), type: 'rpa', baseUrl: 'http://rpa.internal:8081/agent-api/v1', headers: { Authorization: 'Bearer ${env:RPA_KB_TOKEN}' }, timeoutMs: 10000, rpa: { portalUrl: 'http://rpa.internal:8080', target: null, workerId: null, pollIntervalMs: 3000, maxPollIntervalMs: 15000, queueTimeoutSec: 300, deadlineSec: null, maxConcurrent: 2 }, description: t('知識庫專用的 API 用戶端：scenes:read、runs:execute、runs:read') });
+const CHECK_COLOR = { ok: 'green', warn: 'amber', error: 'red' };
+const CHECK_TEXT = { ok: tk('通過'), warn: tk('注意'), error: tk('不符') };
+const checkList = checks => `<ul class="timeline">${checks.map(c => `<li>${pill(c.rule ? `${c.rule} ${t(CHECK_TEXT[c.level])}` : t(CHECK_TEXT[c.level]), CHECK_COLOR[c.level])} ${esc(c.text)}</li>`).join('')}</ul>`;
+const runLink = r => (r?.runId ? (r.portalUrl ? `<a href="${esc(r.portalUrl)}" target="_blank" rel="noopener" class="mono">${esc(r.runId)}</a>` : `<span class="mono">${esc(r.runId)}</span>`) : '—');
+const evidenceSummary = r => [...Object.entries(r.outputs || {}).map(([k, v]) => `${esc(k)} = ${esc(typeof v === 'string' ? v : JSON.stringify(v))}`), ...Object.entries(r.digests || {}).map(([k, d]) => esc(t('{name}：{n} 字元，sha256 {hash}…', { name: k, n: d.length, hash: String(d.sha256).slice(0, 12) })))].join(t('；'));
+const EXEC_STATE = { accepted: [tk('已受理'), 'blue'], submitted: [tk('排隊中'), 'blue'], running: [tk('執行中'), 'blue'], needs_login: [tk('需要登入'), 'amber'], rejected: [tk('已拒絕'), 'red'], expired: [tk('已逾時'), 'amber'], done: [tk('已完成'), 'green'] };
+const VERDICT = { pass: [tk('通過'), 'green'], inconclusive: [tk('無法判定'), 'amber'], mismatch: [tk('不符'), 'red'], absent: [tk('疑似不存在'), 'red'] };
+const EFFECT = { promoted_L0: tk('L1 → L0'), renewed_L0: tk('L0 續期'), stale: tk('目標已變，未寫回'), dry_run: tk('試運行，不寫回'), skipped_e1: tk('E1 不晉升'), none: tk('未寫回') };
+const statePill = (map, k) => (map[k] ? pill(t(map[k][0]), map[k][1]) : pill(k));
+const execState = e => `${statePill(EXEC_STATE, e.state)}${e.verdict ? ` ${statePill(VERDICT, e.verdict)}` : ''}`;
+const effectText = e => (e.effect ? mapText(EFFECT, e.effect) : '—');
+// 執行說明：有原因碼時用介面語言的原因說明，細節（RPA 原文、實際值）保持原樣
+// detailText 是服務端按請求語言給出的說明（舊記錄只有繁體原文 detail）
+const detailOf = e => e.detailText ?? e.detail ?? null;
+const execDetail = e => [e.reasonText, e.verdict === 'pass' || !e.reasonText ? detailOf(e) : null].filter(Boolean).join(t('；'));
+
+function executionTable(list, { item = true } = {}) {
+  const short = s => (s && s.length > 90 ? `${s.slice(0, 90)}…` : s || '');
+  if (!item) return table([t('執行'), t('狀態'), t('寫回')], list.map(e => `<tr><td><button class="text-btn mono" data-op="showExecution" data-id="${esc(e.id)}">${esc(e.id)}</button><span class="cell-sub">${ago(e.createdAt)} · ${esc(e.actionId)}</span></td><td>${execState(e)}</td><td>${esc(effectText(e))}</td></tr>`), t('沒有執行記錄'));
+  return table([t('執行'), t('條目 / Action'), t('狀態'), t('RPA 運行'), t('寫回'), t('操作')], list.map(e => `<tr><td><button class="text-btn mono" data-op="showExecution" data-id="${esc(e.id)}">${esc(e.id)}</button><span class="cell-sub">${ago(e.createdAt)} · ${esc(e.requestedBy?.name || e.requestedBy?.id || '')}</span></td><td>${e.target.itemId ? idLink(e.target.itemId) : pill(t('試運行'))} ${tag(e.actionId)}<span class="cell-sub mono">${esc(e.target.locator || '')}</span></td><td class="wrap">${execState(e)}<span class="cell-sub">${esc(short(execDetail(e)))}</span></td><td>${runLink(e.rpa)}${e.rpa?.revision ? `<span class="cell-sub">v${esc(e.rpa.revision)}</span>` : ''}</td><td>${esc(effectText(e))}</td><td><div class="cell-actions">${execOps(e)}</div></td></tr>`), t('沒有執行記錄'));
+}
+
+function execOps(e) {
+  const ops = [];
+  if (e.state === 'expired' && e.rpa?.runId) ops.push(`<button class="text-btn" data-op="refreshExecution" data-id="${esc(e.id)}">${t('重新讀取原運行')}</button>`);
+  if ((e.state === 'needs_login' || e.state === 'expired' || e.state === 'rejected' || e.verdict === 'inconclusive') && e.target.itemId) ops.push(`<button class="text-btn" data-op="validate" data-id="${esc(e.target.itemId)}" data-action="${esc(e.actionId)}">${e.state === 'needs_login' ? t('登入後重試') : t('重新校驗')}</button>`);
+  return ops.join('');
+}
+
+function executionHtml(e) {
+  const rows = [
+    [t('狀態'), `${execState(e)}${e.terminal ? '' : ` <span class="muted">${t('（後台執行中，關閉此窗口不影響）')}</span>`}`],
+    [t('說明'), esc(execDetail(e) || (e.terminal ? '—' : t('等待 RPA…')))],
+    [t('條目'), e.target.itemId ? t('{item}（客體 {object}）', { item: idLink(e.target.itemId), object: idLink(e.target.objectId) }) : t('試運行：客體 {object}', { object: idLink(e.target.objectId) })],
+    [t('定位'), `<span class="mono">${esc(e.target.locator || '—')}</span>`],
+    ['Action', `${tag(e.actionId)} ${esc(e.actionName || '')}`],
+    [t('RPA 運行'), `${runLink(e.rpa)}${e.rpa.status ? ` · ${esc(e.rpa.status)}` : ''}${e.rpa.stage ? ` · ${esc(e.rpa.stage)}` : ''}${e.rpa.workerId ? ` · Worker ${esc(e.rpa.workerId)}` : ''}`],
+    [t('場景版本'), esc(e.rpa.revision ? t('{scene} 審閱 v{expected}，實際 v{actual}', { scene: e.rpa.sceneId, expected: e.rpa.expectedRevision, actual: e.rpa.revision }) : t('{scene} 審閱 v{expected}', { scene: e.rpa.sceneId, expected: e.rpa.expectedRevision }))],
+    [t('入參'), `<pre class="mono-block">${esc(JSON.stringify(e.inputs, null, 2))}</pre>`]
+  ];
+  if (e.reasonText && detailOf(e) && detailOf(e) !== e.reasonText && e.verdict !== 'pass') rows.push([t('細節'), esc(detailOf(e))]);
+  if (e.problems?.length) rows.push([t('入參問題'), e.problems.map(p => `${esc(p.name || p.field)}：${esc(p.message)}`).join('<br>')]);
+  if (e.failures?.length) rows.push([t('守衛不符'), table([t('出參'), t('規則'), t('期望'), t('實際')], e.failures.map(f => `<tr><td class="mono">${esc(f.output)}</td><td>${esc(f.rule)}</td><td class="mono">${esc(JSON.stringify(f.expected))}</td><td class="mono">${esc(JSON.stringify(f.actual))}</td></tr>`))]);
+  if (e.evidence) rows.push([t('證據'), evidenceSummary(e.evidence) || '—']);
+  if (e.effect) rows.push([t('寫回'), `${esc(effectText(e))}${e.commit ? ` · ${t('commit|提交')} <span class="mono">${esc(String(e.commit).slice(0, 8))}</span>` : ''}`]);
+  if (e.lastError && !e.terminal) rows.push([t('最近錯誤'), esc(e.lastError)]);
+  rows.push([t('時間'), [`${t('受理')} ${fmtTime(e.createdAt)}`, e.submittedAt ? `${t('time|提交')} ${fmtTime(e.submittedAt)}` : '', e.finishedAt ? `${t('結束')} ${fmtTime(e.finishedAt)}` : ''].filter(Boolean).join(' · ')]);
+  return `<dl class="kv">${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl><div class="cell-actions" style="margin-top:12px">${execOps(e)}</div>`;
+}
+
+/** 打開執行詳情並輪詢到終態；關閉窗口不影響後台執行。 */
+async function watchExecution(id, title = t('執行 {id}', { id })) {
+  let e = await get(`/api/v1/action-executions/${id}`);
+  modal(title, `<div id="exec-box">${executionHtml(e)}</div>`);
+  while (!e.terminal) {
+    await new Promise(r => setTimeout(r, 1500));
+    if (!$('#dialog').open || !$('#exec-box')) return;
+    e = await get(`/api/v1/action-executions/${id}`);
+    $('#exec-box').innerHTML = executionHtml(e);
+  }
+  render();
+}
+
+function contractHtml(c) {
+  if (!c) return '';
+  const ins = Object.entries(c.inputs || {}).map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td>${esc(v.type)}</td><td class="wrap">${esc(v.description || '')}${v.enum ? `<span class="cell-sub">${esc(t('可選 {values}', { values: v.enum.join(' / ') }))}</span>` : ''}${v.pattern ? `<span class="cell-sub mono">${esc(v.pattern)}</span>` : ''}${v.default !== undefined ? `<span class="cell-sub">${esc(t('預設 {value}', { value: v.default }))}</span>` : ''}</td></tr>`);
+  const outs = Object.entries(c.outputs || {}).map(([k, v]) => `<tr><td class="mono">${esc(k)}</td><td>${esc(v.type)}</td><td class="wrap">${esc(v.description || '')}</td></tr>`);
+  return `<dl class="kv" style="margin-top:12px"><dt>${t('場景')}</dt><dd>${esc(c.name || c.id || '')}<span class="cell-sub">${esc(c.description || '')}</span></dd><dt>${t('登入角色')}</dt><dd>${esc(c.loginRole || t('不需要'))}</dd><dt>${t('期限')}</dt><dd>${c.deadlineMs ? esc(t('{n} 秒', { n: Math.round(c.deadlineMs / 1000) })) : t('未宣告')}</dd><dt>${t('獨立斷言')}</dt><dd>${esc(t('{n} 條', { n: c.verifyCount }))}</dd></dl><h4 style="margin:12px 0 6px">${t('入參')}</h4>${table([t('名稱'), t('型別'), t('說明')], ins, t('沒有入參'))}<h4 style="margin:12px 0 6px">${t('出參')}</h4>${table([t('名稱'), t('型別'), t('說明')], outs, t('沒有出參'))}`;
+}
+
+const readOnlyBox = n => `<label class="check" style="margin-top:12px"><input type="checkbox" name="readOnly" value="1"> ${esc(t('我已審閱 v{n}：只讀，沒有下單、審批、修改數據等業務副作用', { n }))}</label>`;
+
+Object.assign(OPS, {
+  showExecution: id => watchExecution(id),
+  async refreshExecution(id) {
+    await post(`/api/v1/action-executions/${id}/refresh`);
+    return watchExecution(id, t('重新讀取 {id}', { id }));
+  },
+  async previewAction(id) {
+    const objects = (await get('/api/v1/objects?status=在用')).filter(o => (o.actionIds || []).includes(id));
+    modal(t('預覽 {id}', { id }), `<p class="notice">${t('選一個掛了這個 Action 的客體，看解析出的定位分組、提交給 RPA 的入參與守衛期望值。預覽不派發運行；「試運行」走完整流程，但不寫回有效性。')}</p>${field(t('客體'), select('objectId', objects.length ? objects.map(o => [o.id, `${o.id} ${o.name}（${o.locator || t('無定位')}）`]) : [['', t('還沒有客體掛上這個 Action')]]))}${field(t('或直接輸入定位'), input('locator', '', `placeholder="${esc(t('例如 {example}', { example: 'adb_wdk_scm_dpartner.replenish_order' }))}"`))}<div id="preview-box"></div><div class="cell-actions" style="margin-top:8px"><button class="text-btn" id="trial-run" type="button">${t('試運行（不寫回）')}</button></div>`, {
+      label: t('預覽'),
+      run: async () => {
+        const d = formData($('#dialog-content'));
+        const r = (await post(`/api/v1/actions/${id}/preview`, d.locator ? { locator: d.locator } : { objectId: d.objectId })).data;
+        $('#preview-box').innerHTML = `${r.warnings.map(w => `<p class="notice warn">${esc(w)}</p>`).join('')}${r.problems.map(p => `<p class="notice warn">${esc(p.name)}：${esc(p.message)}</p>`).join('')}<dl class="kv"><dt>${t('定位分組')}</dt><dd class="mono">${esc(JSON.stringify(r.groups))}</dd><dt>${t('RPA 入參')}</dt><dd><pre class="mono-block">${esc(JSON.stringify(r.inputs, null, 2))}</pre></dd><dt>${t('守衛')}</dt><dd>${(r.expect || []).map(e => `${esc(e.output)} ${e.nonEmpty ? t('非空') : `= ${esc(JSON.stringify(e.equals))}`}`).join('<br>') || '—'}</dd></dl>`;
+        return true;
+      }
+    });
+    $('#trial-run').onclick = async () => {
+      const d = formData($('#dialog-content'));
+      if (!d.objectId) return showError(new Error(t('試運行需要選一個客體')), $('#dialog-content'));
+      try {
+        const r = await post(`/api/v1/actions/${id}/trial`, { objectId: d.objectId });
+        await watchExecution(r.data.executionId, t('試運行 {id}', { id }));
+      } catch (err) { showError(err, $('#dialog-content')); }
+    };
+  },
+  async reviewAction(id) {
+    const a = (await get('/api/v1/actions')).find(x => x.id === id);
+    const sc = await get(`/api/v1/pipelines/${a.pipelineId}/scenes/${encodeURIComponent(a.rpa.sceneId)}`);
+    const same = sc.revision?.number === a.rpa.revision && sc.revision?.contentHash === a.rpa.contentHash;
+    const next = sc.revision?.number ?? '?';
+    const note = same ? t('場景 {scene} 的發布版本仍是審閱過的 v{n}，不需要重新審閱。', { scene: a.rpa.sceneId, n: a.rpa.revision }) : t('場景 {scene} 已發布 v{next}，Action 審閱的是 v{n}。確認新版本只讀後，Action 會鎖到新版本。', { scene: a.rpa.sceneId, next, n: a.rpa.revision });
+    modal(t('審閱 {id}', { id }), `<p class="notice ${same ? '' : 'warn'}">${esc(note)}</p>${checkList(sc.conformance)}${contractHtml(sc.contract)}${same ? '' : readOnlyBox(next)}`, same ? null : {
+      label: t('鎖到新版本'),
+      run: async () => {
+        if (!$('#dialog-content [name=readOnly]').checked) throw new Error(t('請先勾選已審閱、確認只讀'));
+        await post(`/api/v1/actions/${id}/review`, { readOnly: true });
+        toast(t('{id} 已鎖到 v{n}', { id, n: next }));
+        render();
+      }
+    });
+  },
+  async sceneDetail(sceneId, data) {
+    const kinds = schema?.objectCategories?.數字?.kinds || ['數據表'];
+    const kind = kinds.includes('數據表') ? '數據表' : kinds[0];
+    const sc = await get(`/api/v1/pipelines/${data.pipeline}/scenes/${encodeURIComponent(sceneId)}?${qs({ objectKind: kind })}`);
+    if (!sc.draft) return modal(t('場景 {id}', { id: sceneId }), checkList(sc.conformance));
+    const blocked = sc.conformance.some(c => c.level === 'error');
+    modal(t('場景 {id} v{n}', { id: sceneId, n: sc.revision.number }), `${checkList(sc.conformance)}${contractHtml(sc.contract)}${sc.actions.length ? `<p class="notice">${esc(t('已登記：{list}', { list: sc.actions.map(x => `${x.id} ${x.name}（v${x.rpa.revision}）`).join(t('、')) }))}</p>` : ''}
+      <h4 style="margin:16px 0 8px">${t('從場景生成校驗 Action')}</h4>
+      <div class="field-pair">${field(t('適用的客體種類'), select('objectKind', kinds.map(k => [k, tv(k)]), kind))}${field(t('定位示例'), input('example', '', `placeholder="${esc(t('例如 {example}', { example: 'adb_wdk_scm_dpartner.replenish_order' }))}"`))}</div>
+      ${field(t('Action 定義（可修改：rpa.inputs 是入參映射，check.expect 是守衛）'), textarea('json', JSON.stringify(sc.draft, null, 2), 'class="code" spellcheck="false" rows="14"'))}
+      ${readOnlyBox(sc.revision.number)}`, blocked ? null : {
+      label: t('保存 Action'),
+      run: async () => {
+        const d = formData($('#dialog-content'));
+        let body;
+        try { body = JSON.parse(d.json); } catch (e) { throw new Error(t('JSON 格式錯誤：{message}', { message: e.message })); }
+        body.objectKinds = [d.objectKind];
+        if (body.locator) body.locator.example = d.example || null;
+        body.review = { readOnly: $('#dialog-content [name=readOnly]').checked };
+        if (!body.review.readOnly) throw new Error(t('啟用前請勾選已審閱、確認只讀；若只想先保存，請把 enabled 改為 false'));
+        const r = await post('/api/v1/actions', body);
+        toast(t('已保存 {id}：到客體頁把它掛到「可用 Action」，就能在綁定上發起校驗', { id: r.data.id }), 6000);
+        render();
+      }
+    });
+  }
+});
+
+const ROLE_STATUS = { logged_in: tk('已登入'), needs_login: tk('需要登入'), none: tk('從未登入'), unknown: tk('狀態未知') };
+
+PAGES.scenes = async ({ param }) => {
+  const pipe = (await get('/api/v1/pipelines')).find(p => p.id === param);
+  if (!pipe) throw new Error(t('找不到管道 {id}', { id: param }));
+  setHeading(t('場景目錄 · {name}', { name: pipe.name }), t('已發布、未歸檔的 RPA 場景。打開場景查看契約、按可註冊規範檢查，並生成校驗 Action 草稿。'), `${t('動力層')} › ${t('nav|管道')} › ${pipe.id} › ${t('場景目錄')}`);
+  setActions(`<a class="button" href="#pipelines">${t('返回管道')}</a>`);
+  const r = await api('GET', `/api/v1/pipelines/${encodeURIComponent(param)}/scenes`);
+  const roles = r.roles;
+  const roleLine = roles ? `<p class="notice" style="margin-bottom:12px">${t('登入角色：')}${roles.map(x => `${esc(x.name || x.id)} ${pill(mapText(ROLE_STATUS, x.status), x.status === 'logged_in' ? 'green' : 'amber')}`).join(' ') || t('這個 API 用戶端沒有綁定任何登入角色')}</p>` : '';
+  content().innerHTML = `${roleLine}${panel(t('場景（{n}）', { n: r.data.length }), table([t('場景'), t('名稱'), t('領域'), t('發布版本'), t('已登記的 Action'), t('操作')], r.data.map(sc => `<tr><td class="mono">${esc(sc.id)}</td><td class="wrap">${esc(sc.name)}<span class="cell-sub">${esc(sc.description || '')}</span></td><td>${esc(sc.domainId || '—')}</td><td>v${esc(sc.publishedRevision)}</td><td>${sc.actions.map(a => `${tag(a.id)}${a.needsReview ? ` ${pill(t('版本待審（v{n}）', { n: a.revision }), 'amber')}` : ''}`).join(' ') || '—'}</td><td><button class="text-btn" data-op="sceneDetail" data-id="${esc(sc.id)}" data-pipeline="${esc(pipe.id)}">${t('查看與註冊')}</button></td></tr>`), t('沒有可註冊的場景（需要已發布、未歸檔）')))}`;
+};
+
+PAGES.executions = async ({ param }) => {
+  setActions('');
+  content().innerHTML = panel(t('執行記錄'), `<div class="toolbar"><label>${t('狀態')} ${select('state', [['', t('全部')], ['accepted,submitted,running', t('進行中')], ['done', t('已完成')], ['needs_login', t('需要登入')], ['rejected', t('已拒絕')], ['expired', t('已逾時')]], '', 'id="f-state"')}</label><label class="grow">${t('條目或 Action')} ${input('q', param || '', `id="f-q" placeholder="${esc(t('例如 {example}', { example: 'B-0001 / ACT-0007' }))}"`)}</label><small id="f-count" class="muted"></small></div><div id="e-table"></div>`);
+  const load = async () => {
+    const q = $('#f-q').value.trim();
+    const list = await get('/api/v1/action-executions?' + qs({ state: $('#f-state').value, limit: 200, ...(q.startsWith('ACT-') ? { actionId: q } : q ? { itemId: q } : {}) }));
+    $('#f-count').textContent = t('{n} 條', { n: list.length });
+    $('#e-table').innerHTML = executionTable(list);
+  };
+  $('#f-state').onchange = load;
+  let timer;
+  $('#f-q').oninput = () => { clearTimeout(timer); timer = setTimeout(load, 300); };
+  await load();
 };
 
 PAGES.playground = async () => {

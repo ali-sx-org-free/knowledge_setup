@@ -12,6 +12,7 @@ import {
   demoteToL1, promoteToL0, invalidate, addDays, isExpired
 } from './validity.js';
 import { tr, tk } from '../i18n/index.js';
+import { normalizeRpaBaseUrl, normalizePipelineRpa, normalizeRpaAction, actionHash } from './rpa.js';
 
 const DIRS = {
   subject: 'subjects',
@@ -922,7 +923,7 @@ export class KnowledgeStore {
   }
 
   /** Action 校驗結果寫回有效性。 */
-  applyValidationResult(t, id, { outcome, actionId, detail, objectId }, principal) {
+  applyValidationResult(t, id, { outcome, actionId, detail, objectId, check = null, note = null }, principal) {
     const ref = this.getItem(id);
     const v = ref.item.validity;
     const by = actionId || sourceOf(principal).id;
@@ -932,8 +933,9 @@ export class KnowledgeStore {
       else {
         if (objectId && !v.evidence.objectIds.includes(objectId)) v.evidence.objectIds.push(objectId);
         const at = nowIso();
-        promoteToL0(v, { method: 'auto', by, actionId, expiresAt: addDays(at, this.expiryDaysFor(ref.kind, ref.item, ref.subject)), at });
-        effect = 'promoted_L0';
+        const wasL0 = v.level === 'L0';
+        promoteToL0(v, { method: 'auto', by, actionId, note, expiresAt: addDays(at, this.expiryDaysFor(ref.kind, ref.item, ref.subject)), at });
+        effect = check ? (wasL0 ? 'renewed_L0' : 'promoted_L0') : 'promoted_L0';
       }
     } else if (outcome === 'mismatch') {
       if (demoteToL1(v, 'mismatch', { by, note: detail })) effect = 'demoted_L1';
@@ -943,9 +945,38 @@ export class KnowledgeStore {
       this.touchItem(t, ref);
       return { id, effect, level: v.level, affected: res };
     }
-    v.lastCheck = { at: nowIso(), actionId, outcome, detail: detail || null };
+    v.lastCheck = { at: nowIso(), actionId, outcome, detail: detail || null, ...(check || {}) };
     this.touchItem(t, ref);
     return { id, effect, level: v.level };
+  }
+
+  /**
+   * 異步執行（RPA）的結果寫回。先確認執行期間目標沒有變：條目仍在、綁定的客體與定位相同、
+   * Action 配置相同、沒有更晚開始的執行已經寫回；冪等錨點是 lastCheck.executionId。
+   * 返回 { effect, level, reason? }；effect 為 stale / already_applied 時不修改任何知識。
+   */
+  applyExecutionResult(t, exec, principal) {
+    let ref;
+    try { ref = this.getItem(exec.target.itemId); } catch { return { effect: 'stale', reason: 'item_missing' }; }
+    const v = ref.item.validity;
+    if (v.lastCheck?.executionId === exec.id) return { effect: 'already_applied', level: v.level };
+    // 原因的說明見 rpa.js 的 STALE_REASONS（執行記錄按請求語言顯示）
+    const stale = reason => ({ effect: 'stale', reason, level: v.level });
+    if (ref.kind === 'binding' && ref.item.objectId !== exec.target.objectId) return stale('item_changed');
+    const object = this.objects.get(exec.target.objectId);
+    if (!object || object.locator !== exec.target.locator) return stale('object_changed');
+    if (object.status === '下線') return stale('object_offline');
+    const action = this.actions.get(exec.actionId);
+    if (!action || actionHash(action) !== exec.actionHash) return stale('action_changed');
+    if (v.lastCheck?.startedAt && Date.parse(v.lastCheck.startedAt) > Date.parse(exec.createdAt)) return stale('newer_result');
+    const check = {
+      executionId: exec.id,
+      startedAt: exec.createdAt,
+      ...(exec.rpa ? { rpa: { runId: exec.rpa.runId, sceneId: exec.rpa.sceneId, revision: exec.rpa.revision, scenarioHash: exec.rpa.scenarioHash || null, workerId: exec.rpa.workerId || null, finishedAt: exec.rpa.finishedAt || null, portalUrl: exec.rpa.portalUrl || null, outputs: exec.evidence?.outputs || {}, digests: exec.evidence?.digests || {} } } : {})
+    };
+    const note = exec.rpa?.runId ? `RPA 運行 ${exec.rpa.runId}（${exec.id}）` : exec.id;
+    const out = this.applyValidationResult(t, ref.item.id, { outcome: exec.verdict, actionId: exec.actionId, detail: exec.detail, objectId: exec.target.objectId, check, note }, principal);
+    return { effect: out.effect, level: out.level };
   }
 
   // ---------------------------------------------------------------- 衝突、反饋、缺口
@@ -1083,6 +1114,13 @@ export class KnowledgeStore {
     for (const v of Object.values(input.headers || {})) if (/^(bearer|basic)\s+[a-z0-9._-]{12,}/i.test(String(v)) && !String(v).includes('${env:')) throw new RuleError(tr('請勿把憑證明文寫入知識倉庫；使用 ${env:變數名} 引用環境變數'), 400, 'secret_in_repo');
     const id = input.id && this.pipelines.has(input.id) ? input.id : this.nextId(ID_PREFIX.pipeline);
     const p = { id, name: clean(input.name), type: input.type, description: clean(input.description) || null, baseUrl: clean(input.baseUrl) || null, headers: input.headers || {}, timeoutMs: Number(input.timeoutMs) || 8000, routes: Array.isArray(input.routes) ? input.routes : [], updatedAt: nowIso() };
+    if (input.type === 'rpa') {
+      p.baseUrl = normalizeRpaBaseUrl(input.baseUrl);
+      p.timeoutMs = Number(input.timeoutMs) || 10000;
+      p.routes = [];
+      p.rpa = normalizePipelineRpa(input.rpa || {});
+      if (!Object.keys(p.headers).some(k => k.toLowerCase() === 'authorization')) t.warn(tr('RPA 管道沒有 authorization 標頭：Agent API 需要 Authorization: Bearer ${env:變數名}'));
+    }
     this.pipelines.set(id, p);
     t.touch('pipeline', id);
     return p;
@@ -1093,6 +1131,7 @@ export class KnowledgeStore {
     if (!ACTION_KINDS[input.kind]) throw new RuleError(tr('Action 種類必須為 校驗 / 取值（MVP 只讀不寫）'), 400);
     if (!clean(input.name)) throw new RuleError(tr('Action 名稱必填'), 400);
     if (!this.pipelines.has(input.pipelineId)) throw new RuleError(tr('管道 {id} 不存在', { id: input.pipelineId }), 422);
+    if (this.pipelines.get(input.pipelineId).type === 'rpa') return this.upsertRpaAction(t, input, principal);
     if (input.request?.method && !['GET', 'HEAD', 'POST'].includes(String(input.request.method).toUpperCase())) throw new RuleError(tr('MVP 只讀：請求方法限 GET / HEAD / POST（查詢類）'), 400);
     const id = input.id && this.actions.has(input.id) ? input.id : this.nextId(ID_PREFIX.action);
     const a = {
@@ -1109,6 +1148,39 @@ export class KnowledgeStore {
     this.actions.set(id, a);
     t.touch('action', id);
     return a;
+  }
+
+  /** RPA Action：鎖定審閱過的場景版本；啟用前負責人必須確認只讀（沒有業務副作用）。 */
+  upsertRpaAction(t, input, principal) {
+    const previous = input.id ? this.actions.get(input.id) : null;
+    const spec = normalizeRpaAction(input);
+    const enabled = input.enabled !== false;
+    const readOnly = input.review?.readOnly === true;
+    if (enabled && !readOnly) throw new RuleError(tr('啟用 RPA Action 前，負責人需要審閱場景並確認只讀（review.readOnly: true）：場景不能有下單、審批、修改數據等業務副作用'), 400, 'review_required');
+    const objectKinds = Array.isArray(input.objectKinds) ? input.objectKinds.map(String).filter(Boolean) : [];
+    if (!objectKinds.length) t.warn(tr('沒有限定適用的客體種類（objectKinds）：任何客體都能掛這個 Action'));
+    const id = previous ? previous.id : this.nextId(ID_PREFIX.action);
+    const sameReview = previous?.review?.readOnly && previous.rpa?.revision === spec.rpa.revision && previous.rpa?.contentHash === spec.rpa.contentHash && previous.rpa?.sceneId === spec.rpa.sceneId;
+    const review = readOnly ? (sameReview ? previous.review : { readOnly: true, by: sourceOf(principal).id, at: nowIso() }) : { readOnly: false };
+    const a = {
+      id, name: clean(input.name), kind: input.kind, description: clean(input.description) || null,
+      objectKinds, pipelineId: input.pipelineId,
+      ...spec,
+      review,
+      enabled,
+      inputs: [],
+      permission: ['consumer', 'contributor', 'owner'].includes(input.permission) ? input.permission : 'contributor',
+      updatedAt: nowIso()
+    };
+    if (a.permission === 'consumer') t.warn(tr('RPA 校驗會真實派發運行，建議調用權限至少為 contributor'));
+    this.actions.set(id, a);
+    t.touch('action', id);
+    return a;
+  }
+
+  /** RPA Action 的配置雜湊（執行開始時快照，寫回前比對）。 */
+  actionHash(action) {
+    return actionHash(action);
   }
 
   // ---------------------------------------------------------------- 保鮮觸發器
@@ -1166,7 +1238,7 @@ export class KnowledgeStore {
    *  - 關係：exists 且請求模板引用了關係本身（{item.from} / {item.to} 等）。
    */
   actionSuits(action, ref) {
-    if (action?.kind !== '校驗') return false;
+    if (action?.kind !== '校驗' || action.enabled === false) return false;
     const mode = action.check?.mode || 'exists';
     if (ref.kind === 'binding') return mode === 'exists';
     if (ref.kind === 'assertion') return mode === 'equals' && !!ref.item.structured;

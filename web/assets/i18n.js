@@ -81,7 +81,10 @@ export const DATA_PATTERNS = [
   ['負責人判定失效：{reason}', /^負責人判定失效：(?<reason>.*)$/s],
   ['實際值 {value} 與斷言一致', /^實際值 (?<value>.+) 與斷言一致$/s],
   ['實際值 {value}，斷言值 {expected}', /^實際值 (?<value>.+)，斷言值 (?<expected>.+)$/s],
-  ['客體存在（HTTP {status}）', /^客體存在（HTTP (?<status>\d+)）$/]
+  ['客體存在（HTTP {status}）', /^客體存在（HTTP (?<status>\d+)）$/],
+  // RPA 校驗寫回的層級歷史備註與最近校驗說明（守衛摘要裡的出參名與值不翻譯）
+  ['RPA 運行 {run}（{id}）', /^RPA 運行 (?<run>\S+)（(?<id>[^（）]+)）$/],
+  ['守衛全部通過：{summary}', /^守衛全部通過：(?<summary>.*)$/s]
 ];
 
 // 服務端寫入知識倉庫、會原樣顯示在後台的固定短語（td() 精確匹配）。

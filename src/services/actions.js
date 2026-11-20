@@ -1,38 +1,13 @@
 // 動力層：管道（數據源連接）與 Action（校驗 / 取值）。MVP 只讀不寫。
-import crypto from 'node:crypto';
 import { RuleError } from '../store/validity.js';
+import { renderTemplate, getPath } from './template.js';
+import { RpaClient, REQUIRED_SCOPES, EXCESS_SCOPES } from './rpa.js';
 import { tr, tk, SOURCE_LOCALE } from '../i18n/index.js';
 
 /** 校驗結果說明：寫入知識倉庫的一律用繁體原文，返回給調用方的按請求語言。 */
 const say = (key, params) => [tr(key, params, SOURCE_LOCALE), tr(key, params)];
 
-function getPath(obj, dotted) {
-  if (!dotted) return obj;
-  return String(dotted).split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
-}
-
-function seededInt(seed, min, max) {
-  const h = crypto.createHash('sha256').update(seed).digest().readUInt32BE(0);
-  return min + (h % (max - min + 1));
-}
-
-/** 模板替換：{input.sku}、{object.locator}、{item.structured.value}、{query.x}、{params.x}、{rand:0:500}、${env:NAME} */
-export function renderTemplate(value, ctx, env = process.env) {
-  if (typeof value === 'string') {
-    const whole = /^\{rand:(-?\d+):(-?\d+)\}$/.exec(value);
-    if (whole) return seededInt(JSON.stringify(ctx.seed || ''), Number(whole[1]), Number(whole[2]));
-    return value
-      .replace(/\$\{env:([A-Z0-9_]+)\}/gi, (_, n) => env[n] ?? '')
-      .replace(/\{rand:(-?\d+):(-?\d+)\}/g, (_, a, b) => String(seededInt(JSON.stringify(ctx.seed || ''), Number(a), Number(b))))
-      .replace(/\{([a-zA-Z_][\w.]*)\}/g, (m, p) => {
-        const v = getPath(ctx, p);
-        return v === undefined || v === null ? '' : String(v);
-      });
-  }
-  if (Array.isArray(value)) return value.map(v => renderTemplate(v, ctx, env));
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, renderTemplate(v, ctx, env)]));
-  return value;
-}
+export { renderTemplate };
 
 function matchPath(pattern, actual) {
   const p = pattern.split('/').filter(Boolean);
@@ -47,15 +22,17 @@ function matchPath(pattern, actual) {
 }
 
 export class ActionRunner {
-  constructor({ store, env = process.env, fetchImpl = globalThis.fetch }) {
+  constructor({ store, env = process.env, fetchImpl = globalThis.fetch, executions = null }) {
     this.store = store;
     this.env = env;
     this.fetch = fetchImpl;
+    this.executions = executions; // RPA 管道的異步執行服務（services/executions.js）
   }
 
   async execute(action, { inputs = {}, object = null, item = null } = {}) {
     const pipeline = this.store.pipelines.get(action.pipelineId);
     if (!pipeline) throw new RuleError(tr('Action {id} 的管道 {pipelineId} 不存在', { id: action.id, pipelineId: action.pipelineId }), 422);
+    if (pipeline.type === 'rpa') throw new RuleError(tr('Action {id} 走 RPA 管道，只能經校驗異步執行（POST /validate/{條目}）', { id: action.id }), 422, 'async_only');
     const ctx = { input: inputs, object: object || {}, item: item || {} };
     const reqPath = renderTemplate(action.request?.path || '/', ctx, this.env);
     const query = Object.fromEntries(Object.entries(renderTemplate(action.request?.query || {}, ctx, this.env)).filter(([, v]) => v !== '' && v !== undefined));
@@ -128,20 +105,44 @@ export class ActionRunner {
   }
 
   /** 校驗 Action：檢查客體是否存在、內容是否與斷言一致，結果寫回有效性。 */
-  async validateItem(itemId, principal, { actionId } = {}) {
+  /**
+   * 受理校驗前的同步檢查（設計 §8.1）：調用權限、Action 已啟用並掛在客體上、客體種類適用、條目不是 E1、客體在用。
+   * 返回 { ref, action, object }。
+   */
+  prepareValidation(itemId, principal, { actionId } = {}) {
     const ref = this.store.getItem(itemId);
     let found;
     if (actionId) {
       const action = this.store.actions.get(actionId);
       if (!action || action.kind !== '校驗') throw new RuleError(tr('{id} 不是校驗 Action', { id: actionId }), 400);
-      if (!this.store.actionSuits(action, ref)) throw new RuleError(ref.kind === 'assertion' ? tr('斷言只能用比對內容的校驗 Action（equals）驗證，且斷言需帶結構化值；客體存在不代表陳述正確') : ref.kind === 'relation' ? tr('關係需要以關係本身為參數（{from}/{to}）的校驗 Action', { from: '{item.from}', to: '{item.to}' }) : tr('綁定只能用檢查客體存在的校驗 Action（exists）'), 422, 'action_not_applicable');
-      const objectId = ref.kind === 'binding' ? ref.item.objectId : ref.item.validity.evidence.objectIds.find(oid => this.store.objects.get(oid)?.actionIds?.includes(actionId)) || ref.item.validity.evidence.objectIds[0];
+      if (!this.store.actionSuits(action, ref)) throw new RuleError(action.enabled === false ? tr('Action {id} 未啟用', { id: actionId }) : ref.kind === 'assertion' ? tr('斷言只能用比對內容的校驗 Action（equals）驗證，且斷言需帶結構化值；客體存在不代表陳述正確') : ref.kind === 'relation' ? tr('關係需要以關係本身為參數（{from}/{to}）的校驗 Action', { from: '{item.from}', to: '{item.to}' }) : tr('綁定只能用檢查客體存在的校驗 Action（exists）'), 422, action.enabled === false ? 'action_disabled' : 'action_not_applicable');
+      const objectIds = ref.kind === 'binding' ? [ref.item.objectId] : ref.item.validity.evidence.objectIds;
+      const objectId = objectIds.find(oid => this.store.objects.get(oid)?.actionIds?.includes(actionId));
+      if (!objectId) throw new RuleError(ref.kind === 'binding' ? tr('Action {id} 沒有掛在 {item} 的綁定客體上；請先在客體的「可用 Action」裡掛上', { id: actionId, item: itemId }) : tr('Action {id} 沒有掛在 {item} 的證據客體上；請先在客體的「可用 Action」裡掛上', { id: actionId, item: itemId }), 422, 'action_not_attached');
       found = { action, objectId };
     } else found = this.store.findValidateAction(ref);
     if (!found) throw new RuleError(tr('{id} 沒有可用的校驗 Action；請由負責人確認，或為證據客體配置校驗 Action', { id: itemId }), 422, 'no_validate_action');
     const { action, objectId } = found;
+    if (!this.canInvoke(action, principal)) throw new RuleError(tr('無權調用 Action {id}（需要 {role}）', { id: action.id, role: action.permission }), 403, 'forbidden');
     const object = objectId ? this.store.objects.get(objectId) : null;
     if (object?.status === '下線') throw new RuleError(tr('證據客體 {id} 已下線', { id: objectId }), 409, 'object_offline');
+    if (object && action.objectKinds?.length && !action.objectKinds.includes(object.kind)) throw new RuleError(tr('Action {id} 只適用於 {kinds}，客體 {object} 是 {kind}', { id: action.id, kinds: action.objectKinds.join(tr('、')), object: object.id, kind: object.kind || tr('未標種類') }), 422, 'object_kind_mismatch');
+    return { ref, action, object };
+  }
+
+  /**
+   * 校驗。http / mock 管道同步執行並返回結果；RPA 管道受理後異步執行，
+   * 返回 { async: true, execution, deduped }（API 回 202）。
+   */
+  async validateItem(itemId, principal, { actionId } = {}) {
+    const { ref, action, object } = this.prepareValidation(itemId, principal, { actionId });
+    const objectId = object?.id || null;
+    if (this.store.pipelines.get(action.pipelineId)?.type === 'rpa') {
+      if (ref.item.validity.level === 'E1') throw new RuleError(tr('{id} 已失效（E1），不再校驗', { id: itemId }), 409, 'item_invalid');
+      if (!this.executions) throw new RuleError(tr('RPA 執行服務未啟動'), 503, 'executions_unavailable');
+      const out = this.executions.start({ ref, action, object, principal });
+      return { async: true, ...out };
+    }
     const r = await this.execute(action, { object, item: ref.item });
     let outcome;
     let detail; // 寫入倉庫（繁體原文）
@@ -166,29 +167,78 @@ export class ActionRunner {
   /** 定期校驗：對所有配置了校驗 Action 的知識執行一次。 */
   async validateAll(principal, { onlyPending = false } = {}) {
     const results = [];
+    const skipped = [];
     for (const ref of this.store.allValidityItems()) {
       const v = ref.item.validity;
       if (v.level === 'E1') continue;
       if (onlyPending && !v.pending) continue;
-      if (!this.store.findValidateAction(ref)) continue;
+      const found = this.store.findValidateAction(ref);
+      if (!found) continue;
+      // RPA 校驗第一期只手動發起；定期複驗在第二期支持（設計 §10）
+      if (this.store.pipelines.get(found.action.pipelineId)?.type === 'rpa') { skipped.push(ref.item.id); continue; }
       try {
         results.push(await this.validateItem(ref.item.id, principal));
       } catch (err) {
         results.push({ id: ref.item.id, outcome: 'error', detail: err.message });
       }
     }
-    return { total: results.length, passed: results.filter(r => r.outcome === 'pass').length, mismatched: results.filter(r => r.outcome === 'mismatch').length, missing: results.filter(r => r.outcome === 'missing').length, errors: results.filter(r => r.outcome === 'error').length, results };
+    return { total: results.length, passed: results.filter(r => r.outcome === 'pass').length, mismatched: results.filter(r => r.outcome === 'mismatch').length, missing: results.filter(r => r.outcome === 'missing').length, errors: results.filter(r => r.outcome === 'error').length, skipped: skipped.length, skippedIds: skipped, results };
   }
 
   async testPipeline(pipelineId) {
     const p = this.store.pipelines.get(pipelineId);
     if (!p) throw new RuleError(tr('管道 {id} 不存在', { id: pipelineId }), 404);
     if (p.type === 'mock') return { ok: true, detail: tr('示意管道，共 {n} 條路由', { n: (p.routes || []).length }) };
+    if (p.type === 'rpa') return this.testRpaPipeline(p);
     try {
       const res = await this.fetch(p.baseUrl, { method: 'GET', headers: renderTemplate(p.headers || {}, {}, this.env), signal: AbortSignal.timeout(p.timeoutMs || 8000) });
       return { ok: res.status < 500, detail: `HTTP ${res.status}` };
     } catch (err) {
       return { ok: false, detail: err.message };
     }
+  }
+
+  /**
+   * RPA 管道的連接測試與最小權限體檢（設計 §7.1）：讀 /meta 與 /workers，
+   * 缺必要權限報錯，多餘權限、回傳頁面內容、並發不小於排隊上限時警告。
+   */
+  async testRpaPipeline(p) {
+    const client = new RpaClient(p, { env: this.env, fetchImpl: this.fetch });
+    const checks = [];
+    const add = (level, text) => checks.push({ level, text });
+    let meta;
+    try {
+      meta = await client.meta();
+    } catch (err) {
+      const hint = err.status === 401 ? tr('（金鑰無效、已撤銷或環境變數沒有設定）') : err.status === 404 ? tr('（地址不是 Agent API，應為 {example}）', { example: 'http://host:8081/agent-api/v1' }) : '';
+      return { ok: false, detail: `${err.message}${hint}`, checks: [{ level: 'error', text: `${err.message}${hint}` }] };
+    }
+    const scopes = Array.isArray(meta.scopes) ? meta.scopes : [];
+    const missing = REQUIRED_SCOPES.filter(s => !scopes.includes(s));
+    const excess = EXCESS_SCOPES.filter(s => scopes.includes(s));
+    add(missing.length ? 'error' : 'ok', missing.length ? tr('缺少權限範圍：{list}', { list: missing.join(tr('、')) }) : tr('權限範圍：{list}', { list: scopes.join(tr('、')) }));
+    if (excess.length) add('warn', tr('知識庫不需要這些權限，建議在 RPA 收回：{list}', { list: excess.join(tr('、')) }));
+    if (meta.pageContent) add('warn', tr('這個 API 用戶端開著「回傳頁面內容」：知識庫不需要，建議關閉'));
+    const queued = meta.limits?.queuedRuns;
+    if (queued && p.rpa?.maxConcurrent >= queued) add('warn', tr('管道並發 {n} 不小於 RPA 的排隊上限 {limit}：多出的提交會收到 429', { n: p.rpa.maxConcurrent, limit: queued }));
+    if (meta.expiresAt) add(Date.parse(meta.expiresAt) - Date.now() < 14 * 24 * 3600 * 1000 ? 'warn' : 'ok', tr('金鑰到期：{at}', { at: meta.expiresAt }));
+    if (meta.target && p.rpa?.target && meta.target !== 'any' && meta.target !== p.rpa.target) add('warn', tr('管道的執行位置 {mine} 與 API 用戶端允許的 {allowed} 不同', { mine: p.rpa.target, allowed: meta.target }));
+    let workers = null;
+    try {
+      const w = await client.workers();
+      workers = Array.isArray(w) ? w : w?.workers || [];
+      const online = workers.filter(x => x.online || x.status === 'online');
+      add(online.length || p.rpa?.target === 'local' ? 'ok' : 'warn', tr('在線 Worker {online} / {total}', { online: online.length, total: workers.length }));
+    } catch (err) {
+      add('warn', tr('讀不到 Worker：{message}', { message: err.message }));
+    }
+    const ok = !checks.some(c => c.level === 'error');
+    return {
+      ok,
+      detail: ok ? tr('已連接 {client}（RPA {server}，API {api}）', { client: meta.client?.name || meta.client?.id || 'API', server: meta.serverVersion || '?', api: meta.apiVersion || '?' }) : checks.filter(c => c.level === 'error').map(c => c.text).join(tr('；')),
+      checks,
+      meta: { client: meta.client || null, scopes, domains: meta.domains ?? null, limits: meta.limits || null, target: meta.target || null, workers: meta.workers ?? null, expiresAt: meta.expiresAt || null, apiVersion: meta.apiVersion || null, serverVersion: meta.serverVersion || null, pageContent: !!meta.pageContent },
+      workers
+    };
   }
 }

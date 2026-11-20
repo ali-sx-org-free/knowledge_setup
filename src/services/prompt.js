@@ -99,6 +99,7 @@ ${table([tr('方法'), tr('路徑'), tr('用途')], [
   ['POST', '/batch', tr('批量提交（單次提交，推薦）')],
   ['POST', '/items/{id}/evidence', tr('補充證據 L2 → L1')],
   ['POST', '/validate/{id}', tr('用校驗 Action 驗證（通過 → L0，不符 → L1，客體不存在 → 下線）')],
+  ['GET', '/action-executions/{id}', tr('RPA 校驗是異步的：POST /validate 返回 202 和 executionId，輪詢這裡到 terminal 為 true；只有 verdict 為 pass 才寫回，「無法判定」不改有效性')],
   ['POST', '/conflicts', tr('登記衝突 {a, b, note}：雙方降為 L1 並通知負責人')],
   ['POST', '/feedback', tr('反饋知識有誤 {targetId, comment}')],
   ['GET', '/gaps', tr('知識缺口（智能體回答「未收錄」的問題），可據此補充知識')],

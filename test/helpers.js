@@ -25,9 +25,9 @@ export async function makeStore() {
 }
 
 /** 啟動完整服務並返回帶身份的 HTTP 客戶端。 */
-export async function startServer({ env = {}, fetchImpl, dataDir } = {}) {
+export async function startServer({ env = {}, fetchImpl, dataDir, executions } = {}) {
   dataDir ||= await tmpDir();
-  const srv = await createServer({ dataDir, env: { ADMIN_PASSWORD: 'test-admin-pass', ...env }, schedulers: false, logger: quiet, fetchImpl });
+  const srv = await createServer({ dataDir, env: { ADMIN_PASSWORD: 'test-admin-pass', ...env }, schedulers: false, logger: quiet, fetchImpl, executions });
   const server = await srv.listen(0, '127.0.0.1');
   const base = `http://127.0.0.1:${server.address().port}`;
   let cookie = '';

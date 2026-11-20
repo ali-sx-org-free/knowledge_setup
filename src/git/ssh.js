@@ -50,6 +50,8 @@ function keygen(args, { input } = {}) {
         reject(err);
       } else resolve(stdout);
     });
+    // ssh-keygen 可能不讀標準輸入就退出（例如拒絕公鑰），這時寫入會得到 EPIPE；結果以退出碼為準，忽略這個錯誤
+    child.stdin.on('error', () => {});
     child.stdin.end(input || '');
   });
 }
