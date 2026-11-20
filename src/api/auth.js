@@ -1,5 +1,6 @@
 // 身份與權限：API 金鑰（三方智能體 / 人 / 管道）與後台會話。
 import crypto from 'node:crypto';
+import { tr } from '../i18n/index.js';
 
 export const ROLE_ORDER = { consumer: 0, contributor: 1, owner: 2 };
 const SESSION_TTL_MS = 12 * 3600 * 1000;
@@ -41,9 +42,9 @@ export class Auth {
     else if (apiKey) {
       const k = this.ctx.settings.findApiKey(apiKey);
       if (k && k.kind === 'human') principal = principalFromKey(k);
-      else if (k) throw new HttpError(403, '後台只允許人登入；智能體請直接使用 API', 'forbidden');
+      else if (k) throw new HttpError(403, tr('後台只允許人登入；智能體請直接使用 API'), 'forbidden');
     }
-    if (!principal) throw new HttpError(401, '密碼或金鑰不正確', 'unauthorized');
+    if (!principal) throw new HttpError(401, tr('密碼或金鑰不正確'), 'unauthorized');
     const token = crypto.randomBytes(32).toString('base64url');
     this.sessions.set(token, { principal, expiresAt: Date.now() + SESSION_TTL_MS });
     return { token, principal };
@@ -69,7 +70,7 @@ export class Auth {
     const bearer = /^Bearer\s+(.+)$/i.exec(header)?.[1] || req.headers['x-api-key'];
     if (bearer) {
       const k = this.ctx.settings.findApiKey(String(bearer).trim());
-      if (!k) throw new HttpError(401, 'API 金鑰無效或已停用', 'unauthorized');
+      if (!k) throw new HttpError(401, tr('API 金鑰無效或已停用'), 'unauthorized');
       this.ctx.settings.touchApiKey(k.id);
       return { principal: principalFromKey(k), via: 'api_key' };
     }
@@ -94,7 +95,7 @@ export class Auth {
         // 會話（瀏覽器）發起的寫請求：校驗 Origin，防跨站請求。
         if (id?.via === 'session' && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
           const origin = req.headers.origin;
-          if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, '跨站請求被拒絕', 'csrf');
+          if (origin && new URL(origin).host !== req.headers.host) throw new HttpError(403, tr('跨站請求被拒絕'), 'csrf');
         }
         next();
       } catch (err) {
@@ -107,16 +108,16 @@ export class Auth {
 export function requireRole(role) {
   return (req, res, next) => {
     const p = req.principal;
-    if (!p) return next(new HttpError(401, '需要身份驗證：請帶 Authorization: Bearer <API 金鑰>', 'unauthorized'));
+    if (!p) return next(new HttpError(401, tr('需要身份驗證：請帶 Authorization: Bearer <API 金鑰>'), 'unauthorized'));
     if (p.isAdmin) return next();
     const effective = p.kind === 'pipeline' ? 'contributor' : p.role;
-    if ((ROLE_ORDER[effective] ?? -1) < ROLE_ORDER[role]) return next(new HttpError(403, `此操作需要 ${role} 權限`, 'forbidden'));
+    if ((ROLE_ORDER[effective] ?? -1) < ROLE_ORDER[role]) return next(new HttpError(403, tr('此操作需要 {role} 權限', { role }), 'forbidden'));
     next();
   };
 }
 
 export function requireAdmin(req, res, next) {
-  if (!req.principal) return next(new HttpError(401, '需要登入', 'unauthorized'));
-  if (!req.principal.isAdmin) return next(new HttpError(403, '需要管理員權限', 'forbidden'));
+  if (!req.principal) return next(new HttpError(401, tr('需要登入'), 'unauthorized'));
+  if (!req.principal.isAdmin) return next(new HttpError(403, tr('需要管理員權限'), 'forbidden'));
   next();
 }

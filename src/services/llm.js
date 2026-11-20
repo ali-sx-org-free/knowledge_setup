@@ -1,4 +1,6 @@
 // OpenRouter 客戶端（OpenAI 兼容的 Chat Completions 介面）。
+import { tr } from '../i18n/index.js';
+
 export class LlmClient {
   constructor({ settings, fetchImpl = globalThis.fetch }) {
     this.settings = settings;
@@ -19,7 +21,7 @@ export class LlmClient {
 
   async chat({ messages, model, temperature, json = true, maxTokens = 1500 }) {
     const cfg = this.config;
-    if (!cfg.apiKey) throw Object.assign(new Error('未配置 OpenRouter API Key'), { status: 503, code: 'llm_not_configured' });
+    if (!cfg.apiKey) throw Object.assign(new Error(tr('未配置 OpenRouter API Key')), { status: 503, code: 'llm_not_configured' });
     const body = { model: model || cfg.model, messages, temperature: temperature ?? Number(cfg.temperature ?? 0.1), max_tokens: maxTokens };
     if (json) body.response_format = { type: 'json_object' };
     const url = `${String(cfg.baseUrl || 'https://openrouter.ai/api/v1').replace(/\/+$/, '')}/chat/completions`;
@@ -34,7 +36,7 @@ export class LlmClient {
     try {
       res = await this.fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(Number(cfg.timeoutMs) || 45000) });
     } catch (err) {
-      throw Object.assign(new Error(`OpenRouter 請求失敗：${err.message}`), { status: 502, code: 'llm_unreachable' });
+      throw Object.assign(new Error(tr('OpenRouter 請求失敗：{error}', { error: err.message })), { status: 502, code: 'llm_unreachable' });
     }
     const text = await res.text();
     let data;
@@ -43,7 +45,7 @@ export class LlmClient {
       const msg = data?.error?.message || text.slice(0, 300);
       // 部分模型不支援 response_format：去掉後重試一次。
       if (json && res.status === 400 && /response_format|json/i.test(msg)) return this.chat({ messages, model, temperature, json: false, maxTokens });
-      throw Object.assign(new Error(`OpenRouter 返回 ${res.status}：${msg}`), { status: 502, code: 'llm_error' });
+      throw Object.assign(new Error(tr('OpenRouter 返回 {status}：{error}', { status: res.status, error: msg })), { status: 502, code: 'llm_error' });
     }
     const content = data?.choices?.[0]?.message?.content ?? '';
     return { content: typeof content === 'string' ? content : JSON.stringify(content), model: data?.model || body.model, usage: data?.usage || null };

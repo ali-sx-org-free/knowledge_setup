@@ -6,6 +6,7 @@ import { buildPrompt, buildSchema } from '../services/prompt.js';
 import { buildOpenApi } from './openapi.js';
 import { RuleError } from '../store/validity.js';
 import { kindOfId } from '../store/model.js';
+import { tr } from '../i18n/index.js';
 
 const consumer = requireRole('consumer');
 const contributor = requireRole('contributor');
@@ -32,7 +33,7 @@ export function baseUrlOf(ctx, req) {
 function resolveRefs(value, refs, index) {
   if (typeof value === 'string' && value.startsWith('$ref:')) {
     const name = value.slice(5);
-    if (!refs.has(name)) throw new RuleError(`第 ${index} 條引用了未定義的 ref「${name}」（ref 必須在前面的條目中定義）`, 400, 'unknown_ref');
+    if (!refs.has(name)) throw new RuleError(tr('第 {index} 條引用了未定義的 ref「{name}」（ref 必須在前面的條目中定義）', { index, name }), 400, 'unknown_ref');
     return refs.get(name);
   }
   if (Array.isArray(value)) return value.map(v => resolveRefs(v, refs, index));
@@ -52,7 +53,7 @@ export function v1Router(ctx) {
     res.type('text/markdown; charset=utf-8').send(markdown);
   });
   r.get('/prompt/:role', (req, res) => {
-    if (!['producer', 'consumer'].includes(req.params.role)) throw new HttpError(404, 'role 必須為 producer 或 consumer', 'not_found');
+    if (!['producer', 'consumer'].includes(req.params.role)) throw new HttpError(404, tr('{field} 必須為 {values}', { field: 'role', values: 'producer / consumer' }), 'not_found');
     const markdown = buildPrompt({ store: S(), baseUrl: baseUrlOf(ctx, req), role: req.params.role });
     if (req.query.format === 'json') return ok(res, { role: req.params.role, format: 'markdown', prompt: markdown, version: '0.1' });
     res.type('text/markdown; charset=utf-8').send(markdown);
@@ -64,7 +65,7 @@ export function v1Router(ctx) {
   // ------------------------------------------------------------ 消費：讀取
   r.get('/resolve', consumer, (req, res) => {
     const text = String(req.query.text || '');
-    if (!text) throw new HttpError(400, 'text 必填', 'invalid_input');
+    if (!text) throw new HttpError(400, tr('{field} 必填', { field: 'text' }), 'invalid_input');
     const out = S().resolveTerms(text);
     ok(res, { ...out, canonical: out.canonical.map(id => S().subjectSummary(S().subjects.get(id))) });
   });
@@ -161,8 +162,8 @@ export function v1Router(ctx) {
 
   r.post('/batch', contributor, async (req, res) => {
     const items = req.body?.items;
-    if (!Array.isArray(items) || !items.length) throw new HttpError(400, 'items 必須為非空陣列', 'invalid_input');
-    if (items.length > 500) throw new HttpError(400, '單批最多 500 條', 'invalid_input');
+    if (!Array.isArray(items) || !items.length) throw new HttpError(400, tr('items 必須為非空陣列'), 'invalid_input');
+    if (items.length > 500) throw new HttpError(400, tr('單批最多 {n} 條', { n: 500 }), 'invalid_input');
     const message = `[批量] ${String(req.body.message || '批量提交').slice(0, 100)}（${items.length} 條）`;
     const st = S();
     const out = await st.tx(req.principal, message, t => {
@@ -184,12 +185,12 @@ export function v1Router(ctx) {
             case 'evidence.add': r2 = st.addEvidence(t, d.id, d, req.principal); break;
             case 'conflict.create': r2 = st.reportConflict(t, d, req.principal); break;
             case 'feedback.create': r2 = st.submitFeedback(t, d, req.principal); break;
-            default: throw new RuleError(`未知 op「${it.op}」`, 400, 'unknown_op');
+            default: throw new RuleError(tr('未知 op「{op}」', { op: it.op }), 400, 'unknown_op');
           }
           if (it.ref) refs.set(String(it.ref), r2.id);
           results.push({ index: i, op: it.op, ref: it.ref || null, id: r2.id, level: r2.validity?.level ?? r2.level ?? null });
         } catch (err) {
-          err.message = `第 ${i} 條（${it.op}${it.ref ? ` ref=${it.ref}` : ''}）：${err.message}；整批已回滾`;
+          err.message = tr('第 {index} 條（{op}）：{message}；整批已回滾', { index: i, op: `${it.op}${it.ref ? ` ref=${it.ref}` : ''}`, message: err.message });
           err.index = i;
           throw err;
         }
@@ -244,7 +245,7 @@ export function v1Router(ctx) {
     txOut(res, out, 201);
   });
   r.put('/pipelines/:id', owner, async (req, res) => {
-    if (!S().pipelines.has(req.params.id)) throw new HttpError(404, `找不到管道 ${req.params.id}`, 'not_found');
+    if (!S().pipelines.has(req.params.id)) throw new HttpError(404, tr('找不到管道 {id}', { id: req.params.id }), 'not_found');
     const out = await S().tx(req.principal, `[動力層] 更新管道 ${req.params.id}`, t => S().upsertPipeline(t, { ...req.body, id: req.params.id }, req.principal));
     txOut(res, out);
   });
@@ -254,7 +255,7 @@ export function v1Router(ctx) {
     txOut(res, out, 201);
   });
   r.put('/actions/:id', owner, async (req, res) => {
-    if (!S().actions.has(req.params.id)) throw new HttpError(404, `找不到 Action ${req.params.id}`, 'not_found');
+    if (!S().actions.has(req.params.id)) throw new HttpError(404, tr('找不到 Action {id}', { id: req.params.id }), 'not_found');
     const out = await S().tx(req.principal, `[動力層] 更新 Action ${req.params.id}`, t => S().upsertAction(t, { ...req.body, id: req.params.id }, req.principal));
     txOut(res, out);
   });
@@ -266,7 +267,7 @@ export function v1Router(ctx) {
     txOut(res, out);
   });
 
-  r.use((req, res, next) => next(new HttpError(404, `未知端點 ${req.method} ${req.baseUrl}${req.path}`, 'not_found')));
+  r.use((req, res, next) => next(new HttpError(404, tr('未知端點 {endpoint}', { endpoint: `${req.method} ${req.baseUrl}${req.path}` }), 'not_found')));
   return r;
 }
 

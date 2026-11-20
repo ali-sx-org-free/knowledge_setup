@@ -80,3 +80,7 @@ label.field select,label.field input:not([type=checkbox]):not([type=radio]),labe
 .dialog-body>.notice{margin-bottom:4px}
 .dialog-body>label.check{margin:10px 0}
 td.wrap-sm{white-space:normal;min-width:110px;line-height:1.6}
+/* 語言切換 */
+.lang-select{min-height:28px;padding:3px 6px;font-size:12px;width:auto}
+.login-lang{margin-left:auto}
+.top-end #lang-slot{display:inline-flex;align-items:center}

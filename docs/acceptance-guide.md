@@ -10,6 +10,7 @@
 | 教程 prompt API（智能體自學） | [D](#d-公開端點與權限) |
 | 消費型 API（結構化知識 + 自然語言答案） | [C](#c-消費型-api問答)、[H](#h-openrouter-自然語言可選) |
 | 一鍵安裝（release 包，測速選鏡像）與 CI 流水綫 | [J](#j-一鍵安裝與-ci-流水綫) |
+| 多語言：管理後台與 API 支持繁體中文、簡體中文、英文 | [K](#k-多語言繁中--簡中--english) |
 
 > 本教程的每條命令和預期結果，都已在全新環境中按本文順序實際跑過一遍。截圖來自同一次運行。
 
@@ -27,6 +28,7 @@
 - [H. OpenRouter 自然語言（可選）](#h-openrouter-自然語言可選)
 - [I. 容器部署（可選）](#i-容器部署可選)
 - [J. 一鍵安裝與 CI 流水綫](#j-一鍵安裝與-ci-流水綫)
+- [K. 多語言（繁中 / 簡中 / English）](#k-多語言繁中--簡中--english)
 - [驗收記錄表](#驗收記錄表)
 - [常見問題](#常見問題)
 - [附錄：示例資料 ID 速查](#附錄示例資料-id-速查)
@@ -73,14 +75,14 @@ npm test
 **預期**：最後幾行為
 
 ```
-# tests 29
-# pass 29
+# tests 37
+# pass 37
 # fail 0
 ```
 
-其中 SSH 部署金鑰的端到端一項需要本機有 `sshd`，沒有時會自動跳過（顯示為 `# skipped 1`，`# pass 28`）。
+其中 SSH 部署金鑰相關的 3 項需要本機有 OpenSSH（端到端一項還需要 `sshd`），沒有時會自動跳過（例如顯示為 `# skipped 3`，`# pass 34`）。
 
-這些測試覆蓋模型規則（寫入上限、晉升與降級、衝突、反饋、擁有關係唯一）和端到端流程（教程 API、權限、批量提交、6 個問答示例、Action 校驗、OpenRouter 模擬、Git 遠端推送與回拉、後台登入）。自動化測試通過後，下面的手動驗收主要確認「你親眼看到的」與設計一致。
+這些測試覆蓋模型規則（寫入上限、晉升與降級、衝突、反饋、擁有關係唯一）、端到端流程（教程 API、權限、批量提交、6 個問答示例、Action 校驗、OpenRouter 模擬、Git 遠端推送與回拉、後台登入）和多語言（字典完整、錯誤與教程按語言返回、倉庫內容保持繁體）。自動化測試通過後，下面的手動驗收主要確認「你親眼看到的」與設計一致。
 
 ---
 
@@ -666,11 +668,88 @@ bash install.sh --package knowledge_setup-v0.1.0.tar.gz
 
 ---
 
+## K. 多語言（繁中 / 簡中 / English）
+
+管理後台和 API 支持繁體中文、簡體中文和英文。介面文字、錯誤訊息、提示、教程按語言切換；**知識內容（名稱、定義、斷言）按提交時的原文保存，不翻譯**；主體類型、關係類型等**枚舉值是 API 的值，所有語言下都用繁體原文**。
+
+### K1 後台切換語言
+
+1. 退出登入，打開 `http://localhost:8080/?lang=en`。**預期**：登入頁為英文（**Sign in to the admin console**），右上角語言選單顯示 **English**。不帶 `?lang` 時按瀏覽器語言選擇：`zh-TW`、`zh-HK` 用繁體，其他中文用簡體，其他語言用英文。
+2. 登入，打開 **Overview › Health metrics**。**預期**：選單、標題、指標名稱、表頭全部為英文。
+
+   ![英文介面的健康指標](images/acceptance/20-lang-en.png)
+
+3. 在頂欄語言選單選 **简体中文**。**預期**：頁面重新載入為簡體（選單為「总览 知识库 图谱 治理 动力层 接入 设置」）；刷新頁面、重新登入後仍是簡體。**設定 › 帳號** 中也可以切換。
+4. 打開可售庫存的知識卡（`#subject/S-INV-0012`）。**預期**：類型顯示「指标」，層級徽章「L0 可靠」「L1 参考」，有效期、校驗方式等說明為簡體；主體名稱、定義和斷言內容保持原文（繁體）。
+
+   ![簡體介面的主體一覽](images/acceptance/21-lang-zh-CN.png)
+
+5. 切回 **繁體中文**，後續章節的截圖與文字以繁體為準。
+
+### K2 API 按語言返回
+
+```bash
+curl -s "$BASE/api/v1/subjects?lang=en"; echo
+curl -s -H 'Accept-Language: zh-CN' "$BASE/api/v1/subjects"; echo
+```
+
+**預期**：兩次都是 401，`error.code` 都是 `unauthorized`，訊息分別為
+
+```
+Authentication required: send Authorization: Bearer <API key>
+需要身份验证：请带 Authorization: Bearer <API 密钥>
+```
+
+`?lang=` 優先於 `Accept-Language`；都沒有時用環境變數 `KNOWLEDGE_LANG`（預設繁體中文）。回應頭 `Content-Language` 標明實際使用的語言。
+
+```bash
+api $CONS POST '/api/v1/ask?lang=en' '{"question":"可售庫存怎麼算？","compose":"template"}'
+```
+
+**預期**：`status` 為 `answered`，`answer` 為
+
+```
+According to "可售庫存" in the knowledge base (S-INV-0012, Metric, overall level L0):
+· 可售庫存 = 實物庫存 − 已預佔 − 凍結 − 安全庫存 〔A-0001·L0 reliable〕
+```
+
+答案框架和層級說明是英文，引用的知識內容是原文。配置了 OpenRouter 時，模型用問題的語言作答；問題語言無法判斷時用請求的語言。
+
+```bash
+curl -s "$BASE/api/v1/prompt?lang=en" | head -3
+curl -s -H 'Accept-Language: zh-CN' "$BASE/api/v1/schema" | grep -o '"指標":{[^}]*}'
+api $CONT POST '/api/v1/subjects?lang=en' '{"name":"X","type":"metric","domain":"INV"}'
+```
+
+**預期**：
+
+- 教程第一行為 `# Supply chain technical knowledge base: agent knowledge production guide`；表格中的枚舉值寫成「指標 (Metric)」，示例請求中仍是 `"type": "指標"`。後台 **接入 › 教程** 的拉取地址會帶上目前介面的 `?lang=`。
+- Schema 的鍵仍是「指標」，說明為簡體：`"desc":"有计算口径的度量"`，`"label":"指标"`。
+- 用英文類型名提交被拒：HTTP 400，`Subject type must be one of: 系統, 業務對象, 流程, 規則, 指標, 別名`。枚舉值不翻譯，必須用繁體原文。
+
+### K3 寫入倉庫的內容不隨語言變化
+
+```bash
+api $CONT POST '/api/v1/subjects?lang=en' '{"name":"多語言驗收主體","type":"指標","domain":"INV"}'
+```
+
+**預期**：HTTP 201，`warnings` 為英文（`Consider adding a definition: …`）。打開 **總覽 › 變更記錄**，最新一條提交說明仍是繁體「[生產] 新增主體 S-INV-… 多語言驗收主體（指標）」；切換到英文介面時，提交說明照原樣顯示，作者「管理員」顯示為 Administrator。驗收後可在主體詳情中刪除這個主體。
+
+最後檢查字典完整：
+
+```bash
+npm run i18n:check
+```
+
+**預期**：輸出 `字典完整`，退出碼 0。修改介面或訊息文字後漏翻時，這裡會列出缺少的條目。
+
+---
+
 ## 驗收記錄表
 
 | 編號 | 驗收項 | 預期結果 | 結果 |
 | --- | --- | --- | --- |
-| 1 | 自動化測試 | 全部通過（29 項；沒有 `sshd` 時 1 項跳過） | ☐ |
+| 1 | 自動化測試 | 全部通過（37 項；沒有 OpenSSH 時 3 項跳過） | ☐ |
 | A1 | 啟動服務 | 打印服務地址、知識倉庫、教程地址 | ☐ |
 | A2 | 登入保護 | 錯誤密碼被拒，正確密碼進入後台 | ☐ |
 | B1 | 載入示例資料 | 26 個主體；重複載入被拒 | ☐ |
@@ -705,6 +784,9 @@ bash install.sh --package knowledge_setup-v0.1.0.tar.gz
 | J3 | 重複執行與升級 | 已是最新版本時不重啟；重裝後資料、密碼與設定保留 | ☐ |
 | J4 | 離線安裝 | 本地發佈包校驗通過並啟動 | ☐ |
 | J5 | CI 流水綫 | PR 檢查全綠；推送標籤自動發佈 5 個檔案；版本不一致時拒絕發佈 | ☐ |
+| K1 | 後台切換語言 | 按瀏覽器語言預設；切換後整頁為所選語言並記住；知識內容保持原文 | ☐ |
+| K2 | API 按語言返回 | 錯誤、教程、Schema、問答模板隨 `?lang` / `Accept-Language` 變化；錯誤碼與枚舉值不變 | ☐ |
+| K3 | 倉庫內容不隨語言變 | 英文請求寫入的提交說明仍為繁體；字典檢查顯示「字典完整」 | ☐ |
 
 ---
 

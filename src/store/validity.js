@@ -1,5 +1,6 @@
 // 有效性（Validity）：附在綁定、斷言、關係三處，共用同一套字段與層級規則。
 import { LEVELS, LEVEL_RANK, PENDING_REASONS } from './model.js';
+import { tr } from '../i18n/index.js';
 
 export class RuleError extends Error {
   constructor(message, status = 422, code = 'rule_violation') {
@@ -57,25 +58,25 @@ export function capSubmittedLevel({ requested, principal, validity }) {
   const warnings = [];
   const evidence = hasEvidence(validity);
   const ceiling = evidence ? 'L1' : 'L2';
-  if (requested && !LEVELS.includes(requested)) throw new RuleError(`層級必須為 ${LEVELS.join(' / ')}`, 400, 'invalid_level');
+  if (requested && !LEVELS.includes(requested)) throw new RuleError(tr('層級必須為 {levels}', { levels: LEVELS.join(' / ') }), 400, 'invalid_level');
 
   if (principal?.kind === 'pipeline') {
     if (!requested) return { level: ceiling, warnings, method: null };
-    if (requested === 'E1' && !validity.invalidReason) throw new RuleError('寫入 E1 必須提供 invalidReason（失效原因）', 400, 'missing_invalid_reason');
+    if (requested === 'E1' && !validity.invalidReason) throw new RuleError(tr('寫入 E1 必須提供 invalidReason（失效原因）'), 400, 'missing_invalid_reason');
     return { level: requested, warnings, method: requested === 'L0' ? 'pipeline' : null };
   }
 
   if (requested === 'E1') {
-    if (!validity.invalidReason) throw new RuleError('寫入 E1 必須提供 invalidReason（失效原因）', 400, 'missing_invalid_reason');
+    if (!validity.invalidReason) throw new RuleError(tr('寫入 E1 必須提供 invalidReason（失效原因）'), 400, 'missing_invalid_reason');
     return { level: 'E1', warnings, method: null };
   }
   if (!requested) return { level: ceiling, warnings, method: null };
   if (requested === 'L0') {
-    warnings.push(`人或智能體不能直接寫入 L0，已按寫入上限定為 ${ceiling}。L0 只能通過 Action 校驗或負責人確認晉升。`);
+    warnings.push(tr('人或智能體不能直接寫入 L0，已按寫入上限定為 {level}。L0 只能通過 Action 校驗或負責人確認晉升。', { level: ceiling }));
     return { level: ceiling, warnings, method: null };
   }
   if (requested === 'L1' && !evidence) {
-    warnings.push('沒有客體證據或明確來源，只能寫入 L2。補充證據後可升為 L1。');
+    warnings.push(tr('沒有客體證據或明確來源，只能寫入 L2。補充證據後可升為 L1。'));
     return { level: 'L2', warnings, method: null };
   }
   return { level: requested, warnings, method: null };
@@ -83,14 +84,14 @@ export function capSubmittedLevel({ requested, principal, validity }) {
 
 export function transition(validity, to, { reason, by, note, at = new Date().toISOString() } = {}) {
   const from = validity.level;
-  if (!LEVELS.includes(to)) throw new RuleError(`未知層級 ${to}`, 400);
+  if (!LEVELS.includes(to)) throw new RuleError(tr('未知層級 {level}', { level: to }), 400);
   validity.level = to;
   validity.history = [...(validity.history || []), { at, from, to, reason: reason || null, by: by || null, ...(note ? { note } : {}) }].slice(-HISTORY_LIMIT);
   return { from, to };
 }
 
 export function setPending(validity, reason, note, at = new Date().toISOString()) {
-  if (!PENDING_REASONS[reason]) throw new RuleError(`未知的重驗原因 ${reason}`, 400);
+  if (!PENDING_REASONS[reason]) throw new RuleError(tr('未知的重驗原因 {reason}', { reason }), 400);
   validity.pending = { reason, label: PENDING_REASONS[reason], at, ...(note ? { note } : {}) };
 }
 
@@ -113,9 +114,9 @@ export function demoteToL1(validity, reason, { by, note, at } = {}) {
 }
 
 export function promoteToL0(validity, { method, by, expiresAt, note, actionId, at = new Date().toISOString() }) {
-  if (validity.level === 'E1') throw new RuleError('E1（失效）知識不能晉升；請提交新的知識並指向替代關係', 409, 'invalid_transition');
-  if (validity.level === 'L2' && method === 'manual') throw new RuleError('L2 不能直接晉升 L0：先補充客體證據（L2 → L1），再校驗或確認（L1 → L0）', 409, 'invalid_transition');
-  if (!hasEvidence(validity) && method === 'manual') throw new RuleError('晉升 L0 需要客體證據', 409, 'missing_evidence');
+  if (validity.level === 'E1') throw new RuleError(tr('E1（失效）知識不能晉升；請提交新的知識並指向替代關係'), 409, 'invalid_transition');
+  if (validity.level === 'L2' && method === 'manual') throw new RuleError(tr('L2 不能直接晉升 L0：先補充客體證據（L2 → L1），再校驗或確認（L1 → L0）'), 409, 'invalid_transition');
+  if (!hasEvidence(validity) && method === 'manual') throw new RuleError(tr('晉升 L0 需要客體證據'), 409, 'missing_evidence');
   if (validity.level !== 'L0') transition(validity, 'L0', { reason: method === 'auto' ? `Action 校驗通過${actionId ? `（${actionId}）` : ''}` : '負責人確認', by, note, at });
   else validity.history = [...validity.history, { at, from: 'L0', to: 'L0', reason: '重新驗證，延長有效期', by }].slice(-HISTORY_LIMIT);
   validity.method = method;
@@ -128,7 +129,7 @@ export function promoteToL0(validity, { method, by, expiresAt, note, actionId, a
 }
 
 export function invalidate(validity, { reason, replacedBy, by, at = new Date().toISOString() }) {
-  if (!reason) throw new RuleError('轉為 E1 必須寫明失效原因', 400, 'missing_invalid_reason');
+  if (!reason) throw new RuleError(tr('轉為 E1 必須寫明失效原因'), 400, 'missing_invalid_reason');
   if (validity.level !== 'E1') transition(validity, 'E1', { reason: `失效：${reason}`, by, at });
   validity.invalidReason = reason;
   validity.replacedBy = replacedBy || validity.replacedBy || null;

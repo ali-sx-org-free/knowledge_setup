@@ -1,5 +1,6 @@
 // 知識圖譜可視化：無外部依賴的力導向佈局（SVG），支持拖曳節點、平移、縮放、點選。
 import { esc } from './core.js';
+import { t, tv } from './i18n.js';
 
 export const TYPE_COLORS = { 系統: '#147fe6', 業務對象: '#248569', 流程: '#7a5af5', 規則: '#b8661f', 指標: '#0b8fa3', 別名: '#8a99ad' };
 const EDGE_STYLE = {
@@ -73,14 +74,14 @@ export function renderGraph(container, data, { onSelect, focus, height = 560, se
   const nodes = data.nodes;
   const edges = data.edges;
   if (!nodes.length) {
-    container.innerHTML = '<div class="empty"><h2>沒有可顯示的主體</h2><p>調整篩選條件，或先在知識庫中新增主體與關係。</p></div>';
+    container.innerHTML = `<div class="empty"><h2>${t('沒有可顯示的主體')}</h2><p>${t('調整篩選條件，或先在知識庫中新增主體與關係。')}</p></div>`;
     return;
   }
   const pos = layout(nodes, edges, width, height, focus);
   const byId = new Map(nodes.map((d, i) => [d.id, { d, p: pos[i] }]));
   const radius = d => 7 + Math.min(8, Math.log2((d.usage || 0) + 1) * 1.6) + (d.id === focus ? 3 : 0);
   const markers = Object.entries(EDGE_STYLE).map(([l, s]) => `<marker id="arrow-${l}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="${s.stroke}"/></marker>`).join('');
-  container.innerHTML = `<svg class="graph-svg" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="知識圖譜：${nodes.length} 個主體、${edges.length} 條關係"><defs>${markers}</defs><g class="viewport"><g class="edges"></g><g class="nodes"></g></g></svg>`;
+  container.innerHTML = `<svg class="graph-svg" viewBox="0 0 ${width} ${height}" width="100%" height="${height}" role="img" aria-label="${esc(t('知識圖譜：{nodes} 個主體、{edges} 條關係', { nodes: nodes.length, edges: edges.length }))}"><defs>${markers}</defs><g class="viewport"><g class="edges"></g><g class="nodes"></g></g></svg>`;
   const svg = container.querySelector('svg');
   const vp = svg.querySelector('.viewport');
   const gEdges = svg.querySelector('.edges');
@@ -100,7 +101,7 @@ export function renderGraph(container, data, { onSelect, focus, height = 560, se
     gEdges.innerHTML = edges.map(e => {
       const s = EDGE_STYLE[e.level] || EDGE_STYLE.L2;
       const g = edgeGeom(e);
-      return `<g class="edge" data-id="${esc(e.id)}"><line x1="${g.x1}" y1="${g.y1}" x2="${g.x2}" y2="${g.y2}" stroke="${s.stroke}" stroke-width="${s.width}" stroke-dasharray="${s.dash}" marker-end="url(#arrow-${e.level})"><title>${esc(e.id)} ${esc(e.type)} · ${esc(e.level)}</title></line><text x="${g.mx}" y="${g.my - 3}" class="edge-label">${esc(e.type)}</text></g>`;
+      return `<g class="edge" data-id="${esc(e.id)}"><line x1="${g.x1}" y1="${g.y1}" x2="${g.x2}" y2="${g.y2}" stroke="${s.stroke}" stroke-width="${s.width}" stroke-dasharray="${s.dash}" marker-end="url(#arrow-${e.level})"><title>${esc(e.id)} ${esc(tv(e.type, 'rel'))} · ${esc(e.level)}</title></line><text x="${g.mx}" y="${g.my - 3}" class="edge-label">${esc(tv(e.type, 'rel'))}</text></g>`;
     }).join('');
   }
   function drawNodes() {
@@ -111,7 +112,7 @@ export function renderGraph(container, data, { onSelect, focus, height = 560, se
       const sw = d.level === 'L0' ? 2.4 : 1.6;
       const dash = d.level === 'L2' ? 'stroke-dasharray="3 2"' : '';
       const ring = d.level === 'L2' ? `<circle r="${r + 2.5}" fill="none" stroke="#9aa9bb" stroke-width="1.2" stroke-dasharray="3 2"/>` : '';
-      return `<g class="node${d.id === selected ? ' selected' : ''}${d.id === focus ? ' focus' : ''}" data-id="${esc(d.id)}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(d.name)}（${esc(d.type)}${d.level ? '，' + d.level : ''}）">${ring}<circle r="${r}" fill="${TYPE_COLORS[d.type] || '#8a99ad'}" stroke="${stroke}" stroke-width="${sw}" ${dash}/><text y="${r + 13}" class="node-label">${esc(d.name)}</text><title>${esc(d.id)} ${esc(d.name)} · ${esc(d.type)}${d.level ? ' · ' + d.level : ''}</title></g>`;
+      return `<g class="node${d.id === selected ? ' selected' : ''}${d.id === focus ? ' focus' : ''}" data-id="${esc(d.id)}" transform="translate(${p.x},${p.y})" tabindex="0" role="button" aria-label="${esc(d.name)} (${esc(tv(d.type))}${d.level ? ', ' + d.level : ''})">${ring}<circle r="${r}" fill="${TYPE_COLORS[d.type] || '#8a99ad'}" stroke="${stroke}" stroke-width="${sw}" ${dash}/><text y="${r + 13}" class="node-label">${esc(d.name)}</text><title>${esc(d.id)} ${esc(d.name)} · ${esc(tv(d.type))}${d.level ? ' · ' + d.level : ''}</title></g>`;
     }).join('');
   }
   drawEdges();
@@ -176,7 +177,7 @@ export function renderGraph(container, data, { onSelect, focus, height = 560, se
 }
 
 export function legend() {
-  const types = Object.entries(TYPE_COLORS).map(([t, c]) => `<span class="legend-item"><i style="background:${c}"></i>${esc(t)}</span>`).join('');
+  const types = Object.entries(TYPE_COLORS).map(([type, c]) => `<span class="legend-item"><i style="background:${c}"></i>${esc(tv(type))}</span>`).join('');
   const levels = Object.entries(EDGE_STYLE).map(([l, s]) => `<span class="legend-item"><svg width="26" height="8" aria-hidden="true"><line x1="0" y1="4" x2="26" y2="4" stroke="${s.stroke}" stroke-width="2" stroke-dasharray="${s.dash}"/></svg>${esc(l)}</span>`).join('');
-  return `<div class="legend"><span class="legend-title">主體類型</span>${types}<span class="legend-sep"></span><span class="legend-title">關係層級</span>${levels}<span class="legend-sep"></span><span class="legend-item"><i class="ring-l0"></i>主體 L0（深色描邊）</span><span class="legend-item"><i class="ring-l2"></i>主體 L2（虛線）</span></div>`;
+  return `<div class="legend"><span class="legend-title">${t('主體類型')}</span>${types}<span class="legend-sep"></span><span class="legend-title">${t('關係層級')}</span>${levels}<span class="legend-sep"></span><span class="legend-item"><i class="ring-l0"></i>${t('主體 L0（深色描邊）')}</span><span class="legend-item"><i class="ring-l2"></i>${t('主體 L2（虛線）')}</span></div>`;
 }

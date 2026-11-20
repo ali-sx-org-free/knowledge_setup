@@ -3,9 +3,11 @@ import express from 'express';
 import { requireAdmin, HttpError } from './auth.js';
 import { GitRepo } from '../git/repo.js';
 import { seedInventory } from '../seed/inventory.js';
+import { tr } from '../i18n/index.js';
+import { isMaskedSecret } from '../config.js';
 
 function requireLogin(req, res, next) {
-  if (!req.principal || req.authVia !== 'session') return next(new HttpError(401, '請先登入後台', 'unauthorized'));
+  if (!req.principal || req.authVia !== 'session') return next(new HttpError(401, tr('請先登入後台'), 'unauthorized'));
   next();
 }
 
@@ -55,13 +57,13 @@ export function adminRouter(ctx) {
   r.post('/settings/git/test', requireAdmin, async (req, res) => {
     const cur = ctx.settings.section('git');
     const url = req.body?.url || cur.url;
-    if (!url) throw new HttpError(400, '請填寫倉庫地址', 'invalid_input');
-    const token = req.body?.token && !String(req.body.token).startsWith('已設定') ? req.body.token : cur.token;
-    if (/^\s*-/.test(url)) throw new HttpError(400, '倉庫地址格式不正確', 'invalid_input');
+    if (!url) throw new HttpError(400, tr('請填寫倉庫地址'), 'invalid_input');
+    const token = req.body?.token && !isMaskedSecret(req.body.token) ? req.body.token : cur.token;
+    if (/^\s*-/.test(url)) throw new HttpError(400, tr('倉庫地址格式不正確'), 'invalid_input');
     try {
       res.json({ data: await GitRepo.test({ url, token, username: req.body?.username || cur.username, branch: req.body?.branch || cur.branch, ssh: ctx.ssh }) });
     } catch (err) {
-      throw new HttpError(400, `無法連接：${err.message}`, 'git_error');
+      throw new HttpError(400, tr('無法連接：{error}', { error: err.message }), 'git_error');
     }
   });
 
@@ -82,7 +84,7 @@ export function adminRouter(ctx) {
     res.json({ data: await ctx.ssh.info() });
   });
   r.put('/settings/git', requireAdmin, async (req, res) => {
-    if (/^\s*-/.test(req.body?.url || '')) throw new HttpError(400, '倉庫地址格式不正確', 'invalid_input');
+    if (/^\s*-/.test(req.body?.url || '')) throw new HttpError(400, tr('倉庫地址格式不正確'), 'invalid_input');
     const before = structuredClone(ctx.settings.data.git);
     ctx.settings.update('git', req.body || {});
     try {
@@ -91,7 +93,7 @@ export function adminRouter(ctx) {
       ctx.settings.data.git = before;
       ctx.settings.save();
       await ctx.reconfigure().catch(() => {});
-      throw new HttpError(400, `無法使用該倉庫：${err.message}`, 'git_error');
+      throw new HttpError(400, tr('無法使用該倉庫：{error}', { error: err.message }), 'git_error');
     }
     res.json({ data: { git: ctx.settings.publicSection('git'), status: { ...S().repo.status, auth: S().repo.authMode() }, repoDir: S().repo.dir } });
   });
@@ -127,6 +129,6 @@ export function adminRouter(ctx) {
   r.post('/maintenance/expiry', requireAdmin, async (req, res) => res.json({ data: await ctx.runExpirySweep() }));
   r.post('/maintenance/flush', requireAdmin, async (req, res) => res.json({ data: { commit: await S().flushLazy() } }));
 
-  r.use((req, res, next) => next(new HttpError(404, `未知端點 ${req.method} ${req.originalUrl}`, 'not_found')));
+  r.use((req, res, next) => next(new HttpError(404, tr('未知端點 {endpoint}', { endpoint: `${req.method} ${req.originalUrl}` }), 'not_found')));
   return r;
 }
