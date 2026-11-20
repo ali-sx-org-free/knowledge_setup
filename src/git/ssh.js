@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { tr } from '../i18n/index.js';
 
 export const DEVNULL = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
@@ -89,11 +90,11 @@ export class SshKeys {
   }
 
   requireTools() {
-    if (!which('ssh-keygen')) throw httpError(409, '這台伺服器沒有 ssh-keygen，無法使用 SSH 部署金鑰；請安裝 OpenSSH 客戶端', 'ssh_missing');
+    if (!which('ssh-keygen')) throw httpError(409, tr('這台伺服器沒有 ssh-keygen，無法使用 SSH 部署金鑰；請安裝 OpenSSH 客戶端'), 'ssh_missing');
   }
 
   requireWritable() {
-    if (this.fromEnv) throw httpError(409, '部署金鑰由環境變數 KNOWLEDGE_GIT_SSH_KEY_FILE 提供，無法在後台修改', 'ssh_key_from_env');
+    if (this.fromEnv) throw httpError(409, tr('部署金鑰由環境變數 KNOWLEDGE_GIT_SSH_KEY_FILE 提供，無法在後台修改'), 'ssh_key_from_env');
   }
 
   readMeta() {
@@ -171,7 +172,7 @@ export class SshKeys {
       fs.renameSync(tmp, this.keyFile);
       fs.renameSync(`${tmp}.pub`, `${this.keyFile}.pub`);
     } catch (err) {
-      throw httpError(500, `無法產生部署金鑰：${err.message}`, 'ssh_keygen_failed');
+      throw httpError(500, tr('無法產生部署金鑰：{error}', { error: err.message }), 'ssh_keygen_failed');
     } finally {
       fs.rmSync(tmp, { force: true });
       fs.rmSync(`${tmp}.pub`, { force: true });
@@ -185,9 +186,9 @@ export class SshKeys {
     this.requireWritable();
     this.requireTools();
     const body = String(text || '').replace(/\r\n?/g, '\n').trim();
-    if (!body) throw httpError(400, '請貼上私鑰', 'invalid_input');
-    if (/^(ssh-|ecdsa-|sk-)/.test(body)) throw httpError(400, '這是公鑰；請貼上私鑰（以 -----BEGIN … PRIVATE KEY----- 開頭）', 'ssh_key_invalid');
-    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(body)) throw httpError(400, '無法識別的私鑰格式：請貼上以 -----BEGIN … PRIVATE KEY----- 開頭的完整私鑰', 'ssh_key_invalid');
+    if (!body) throw httpError(400, tr('請貼上私鑰'), 'invalid_input');
+    if (/^(ssh-|ecdsa-|sk-)/.test(body)) throw httpError(400, tr('這是公鑰；請貼上私鑰（以 -----BEGIN … PRIVATE KEY----- 開頭）'), 'ssh_key_invalid');
+    if (!/-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(body)) throw httpError(400, tr('無法識別的私鑰格式：請貼上以 -----BEGIN … PRIVATE KEY----- 開頭的完整私鑰'), 'ssh_key_invalid');
     this.ensureDir();
     const tmp = path.join(this.dir, `.import_key.${process.pid}.${Date.now()}`);
     try {
@@ -196,7 +197,7 @@ export class SshKeys {
       try {
         pub = (await keygen(['-y', '-f', tmp])).trim();
       } catch {
-        throw httpError(400, '私鑰無效或有密碼保護；請使用沒有密碼的私鑰，或在後台直接產生部署金鑰', 'ssh_key_invalid');
+        throw httpError(400, tr('私鑰無效或有密碼保護；請使用沒有密碼的私鑰，或在後台直接產生部署金鑰'), 'ssh_key_invalid');
       }
       fs.renameSync(tmp, this.keyFile);
       fs.writeFileSync(`${this.keyFile}.pub`, pub + '\n', { mode: 0o644 });

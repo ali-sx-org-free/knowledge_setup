@@ -1,4 +1,5 @@
 // 後台共用：Portal 外殼（沿用視覺樣式包 shell.js 的結構與行為）、API 呼叫、表單與格式化工具。
+import { t, tk, tv, locale } from './i18n.js';
 export const $ = (s, root = document) => root.querySelector(s);
 export const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -99,16 +100,16 @@ export function download(name, text, type = 'application/json') {
 export async function copy(text) {
   try {
     await navigator.clipboard.writeText(text);
-    toast('已複製');
+    toast(t('已複製'));
   } catch {
-    toast('無法使用剪貼簿，請手動選取複製');
+    toast(t('無法使用剪貼簿，請手動選取複製'));
   }
 }
 
 // ---- API
 export class ApiError extends Error {
   constructor(status, body) {
-    super(body?.error?.message || `請求失敗（HTTP ${status}）`);
+    super(body?.error?.message || t('請求失敗（HTTP {status}）', { status }));
     this.status = status;
     this.code = body?.error?.code;
     this.body = body;
@@ -119,13 +120,15 @@ export let onUnauthorized = () => {};
 export function setUnauthorizedHandler(fn) { onUnauthorized = fn; }
 
 export async function api(method, path, body) {
-  const res = await fetch(path, { method, credentials: 'same-origin', headers: body !== undefined ? { 'content-type': 'application/json' } : {}, body: body !== undefined ? JSON.stringify(body) : undefined });
+  const headers = { 'accept-language': locale() };
+  if (body !== undefined) headers['content-type'] = 'application/json';
+  const res = await fetch(path, { method, credentials: 'same-origin', headers, body: body !== undefined ? JSON.stringify(body) : undefined });
   const text = await res.text();
   let json;
   try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
   if (res.status === 401 && !path.endsWith('/login')) onUnauthorized();
   if (!res.ok) throw new ApiError(res.status, json);
-  if (json.warnings?.length) toast('提示：' + json.warnings.join('；'), 6000);
+  if (json.warnings?.length) toast(t('提示：{text}', { text: json.warnings.join(t('；')) }), 6000);
   return json;
 }
 export const get = path => api('GET', path).then(r => r.data ?? r);
@@ -135,10 +138,13 @@ export const patch = (path, body = {}) => api('PATCH', path, body);
 export const del = path => api('DELETE', path);
 
 // ---- 格式化
-export const LEVEL_TEXT = { L0: 'L0 可靠', L1: 'L1 參考', L2: 'L2 探索', E1: 'E1 失效' };
+const LEVEL_KEYS = { L0: tk('L0 可靠'), L1: tk('L1 參考'), L2: tk('L2 探索'), E1: tk('E1 失效') };
+export const LEVEL_TEXT = new Proxy(LEVEL_KEYS, { get: (o, k) => (Object.hasOwn(o, k) ? t(o[k]) : undefined) });
 const LEVEL_CLASS = { L0: 'green', L1: 'blue', L2: 'amber', E1: 'red' };
 export const level = l => (l ? `<span class="badge ${LEVEL_CLASS[l] || ''} lvl-${esc(l)}" title="${esc(LEVEL_TEXT[l] || l)}">${esc(LEVEL_TEXT[l] || l)}</span>` : '<span class="muted">—</span>');
 export const pill = (s, c = '') => `<span class="badge ${c}">${esc(s)}</span>`;
+/** 枚舉值（主體類型、客體狀態等）的徽章：顯示譯文，title 保留 API 原值。 */
+export const vpill = (v, c = '', ctx) => `<span class="badge ${c}" title="${esc(v)}">${esc(tv(v, ctx))}</span>`;
 export const tag = s => `<span class="tag">${esc(s)}</span>`;
 export const idLink = (id, label) => {
   if (!id) return '';
@@ -155,10 +161,10 @@ export function fmtTime(iso) {
 export function ago(iso) {
   if (!iso) return '—';
   const s = (Date.now() - Date.parse(iso)) / 1000;
-  if (s < 60) return '剛剛';
-  if (s < 3600) return `${Math.floor(s / 60)} 分鐘前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小時前`;
-  return `${Math.floor(s / 86400)} 天前`;
+  if (s < 60) return t('剛剛');
+  if (s < 3600) return t('{n} 分鐘前', { n: Math.floor(s / 60) });
+  if (s < 86400) return t('{n} 小時前', { n: Math.floor(s / 3600) });
+  return t('{n} 天前', { n: Math.floor(s / 86400) });
 }
 export const pct = v => (v === null || v === undefined ? '—' : `${Math.round(v * 100)}%`);
 
@@ -166,7 +172,7 @@ export function panel(title, body, extra = '', cls = '') {
   return `<section class="panel ${cls}"><div class="panel-header"><h2>${title}</h2><div class="actions">${extra}</div></div>${body}</section>`;
 }
 
-export function table(headers, rows, empty = '沒有相符項目') {
+export function table(headers, rows, empty = t('沒有相符項目')) {
   return `<div class="table-scroll"><table><thead><tr>${headers.map(h => `<th${h.startsWith('#') ? ' class="numeric"' : ''}>${esc(h.replace(/^#/, ''))}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.join('') : `<tr><td colspan="${headers.length}" class="empty-cell">${esc(empty)}</td></tr>`}</tbody></table></div>`;
 }
 

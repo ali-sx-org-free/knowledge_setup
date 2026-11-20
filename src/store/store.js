@@ -11,6 +11,7 @@ import {
   RuleError, normalizeValidity, hasEvidence, sourceOf, capSubmittedLevel, transition, setPending, clearPending,
   demoteToL1, promoteToL0, invalidate, addDays, isExpired
 } from './validity.js';
+import { tr, tk } from '../i18n/index.js';
 
 const DIRS = {
   subject: 'subjects',
@@ -26,7 +27,7 @@ const COLLECTION = { subject: 'subjects', object: 'objects', relation: 'relation
 
 const nowIso = () => new Date().toISOString();
 const clean = v => (typeof v === 'string' ? v.trim() : v);
-const notFound = (what, id) => new RuleError(`找不到${what} ${id}`, 404, 'not_found');
+const notFound = (what, id) => new RuleError(tr('找不到{what} {id}', { what: tr(what), id }), 404, 'not_found');
 
 function compact(value) {
   if (Array.isArray(value)) return value.map(compact);
@@ -91,7 +92,7 @@ export class KnowledgeStore {
       try {
         await this.repo.pull();
       } catch (err) {
-        this.logger.warn?.(`[knowledge] 拉取遠端失敗：${err.message}`);
+        this.logger.warn?.(`[knowledge] ${tr('拉取遠端失敗：{error}', { error: err.message })}`);
       }
     }
     await fs.mkdir(this.root, { recursive: true });
@@ -118,7 +119,7 @@ export class KnowledgeStore {
       try {
         const doc = YAML.parse(await fs.readFile(path.join(this.root, file), 'utf8'));
         if (doc && typeof doc === 'object' && doc.id) out.push(doc);
-        else this.loadErrors.push({ file, error: '缺少 id 欄位' });
+        else this.loadErrors.push({ file, error: tr('缺少 id 欄位') });
       } catch (err) {
         this.loadErrors.push({ file, error: err.message });
       }
@@ -276,7 +277,7 @@ export class KnowledgeStore {
   schedulePush() {
     clearTimeout(this.pushTimer);
     this.pushTimer = setTimeout(() => {
-      this.pushing = this.pushing.then(() => this.repo.push()).catch(err => this.logger.warn?.(`[knowledge] 推送失敗：${err.message}`));
+      this.pushing = this.pushing.then(() => this.repo.push()).catch(err => this.logger.warn?.(`[knowledge] ${tr('推送失敗：{error}', { error: err.message })}`));
     }, 300);
   }
 
@@ -318,13 +319,13 @@ export class KnowledgeStore {
 
   getSubject(id) {
     const s = this.subjects.get(id);
-    if (!s) throw notFound('主體', id);
+    if (!s) throw notFound(tk('主體'), id);
     return s;
   }
 
   getObject(id) {
     const o = this.objects.get(id);
-    if (!o) throw notFound('客體', id);
+    if (!o) throw notFound(tk('客體'), id);
     return o;
   }
 
@@ -335,22 +336,22 @@ export class KnowledgeStore {
       const sid = this.assertionIndex.get(id);
       const subject = sid && this.subjects.get(sid);
       const item = subject?.assertions.find(a => a.id === id);
-      if (!item) throw notFound('斷言', id);
+      if (!item) throw notFound(tk('斷言'), id);
       return { kind, item, subject };
     }
     if (kind === 'binding') {
       const sid = this.bindingIndex.get(id);
       const subject = sid && this.subjects.get(sid);
       const item = subject?.bindings.find(b => b.id === id);
-      if (!item) throw notFound('綁定', id);
+      if (!item) throw notFound(tk('綁定'), id);
       return { kind, item, subject };
     }
     if (kind === 'relation') {
       const item = this.relations.get(id);
-      if (!item) throw notFound('關係', id);
+      if (!item) throw notFound(tk('關係'), id);
       return { kind, item, subject: this.subjects.get(item.from) };
     }
-    throw new RuleError(`${id} 不是帶有效性的條目（只有綁定 B-、斷言 A-、關係 R- 帶有效性）`, 400, 'not_validity_item');
+    throw new RuleError(tr('{id} 不是帶有效性的條目（只有綁定 B-、斷言 A-、關係 R- 帶有效性）', { id }), 400, 'not_validity_item');
   }
 
   touchItem(t, ref) {
@@ -462,7 +463,7 @@ export class KnowledgeStore {
       const targets = this.aliasTargets(s).map(id => this.subjectSummary(this.subjects.get(id)));
       return {
         subject: { id: s.id, name: s.name, type: s.type, domain: s.domain, definition: s.definition || null },
-        alias: { targets, ambiguous: targets.length > 1, guidance: targets.length > 1 ? '別名多義：必須先消歧或向用戶確認指哪一個規範主體' : '請改用規範主體取知識' }
+        alias: { targets, ambiguous: targets.length > 1, guidance: targets.length > 1 ? tr('別名多義：必須先消歧或向用戶確認指哪一個規範主體') : tr('請改用規範主體取知識') }
       };
     }
     const bindings = s.bindings.map(b => ({ id: b.id, level: b.validity.level, usage: levelUsage(b.validity.level), object: this.objects.get(b.objectId) || { id: b.objectId, missing: true }, note: b.note, validity: strip(b.validity) }));
@@ -470,7 +471,7 @@ export class KnowledgeStore {
     const rel = r => ({ id: r.id, type: r.type, level: r.validity.level, usage: levelUsage(r.validity.level), from: this.subjectSummary(this.subjects.get(r.from)), to: this.subjectSummary(this.subjects.get(r.to)), validity: strip(r.validity) });
     const actions = this.actionsForSubject(s).map(a => ({ id: a.id, name: a.name, kind: a.kind, inputs: a.inputs || [], output: a.output || null, description: a.description || null }));
     return {
-      subject: { id: s.id, name: s.name, type: s.type, domain: s.domain, definition: s.definition, owner: s.owner, level: this.subjectLevel(s), levelNote: '綜合層級 = 所有有效客體綁定中的最高層級；沒有有效綁定時為 L2', errorCost: s.errorCost ?? 3, tags: s.tags, updatedAt: s.updatedAt },
+      subject: { id: s.id, name: s.name, type: s.type, domain: s.domain, definition: s.definition, owner: s.owner, level: this.subjectLevel(s), levelNote: tr('綜合層級 = 所有有效客體綁定中的最高層級；沒有有效綁定時為 L2'), errorCost: s.errorCost ?? 3, tags: s.tags, updatedAt: s.updatedAt },
       aliases: this.aliasesOf(s.id),
       bindings,
       assertions,
@@ -479,7 +480,7 @@ export class KnowledgeStore {
         incoming: [...this.relations.values()].filter(r => r.to === s.id && r.type !== '別名').map(rel)
       },
       actions,
-      dynamicValueNote: actions.some(a => a.kind === '取值') ? '動態值不作為知識存儲；回答數量、狀態等動態值時必須調用取值 Action' : null,
+      dynamicValueNote: actions.some(a => a.kind === '取值') ? tr('動態值不作為知識存儲；回答數量、狀態等動態值時必須調用取值 Action') : null,
       levels: LEVEL_INFO
     };
   }
@@ -574,26 +575,26 @@ export class KnowledgeStore {
 
   // ---------------------------------------------------------------- 權限輔助
   assertCanContribute(principal) {
-    if (!principal) throw new RuleError('需要身份驗證', 401, 'unauthorized');
-    if (!principal.isAdmin && !['contributor', 'owner'].includes(principal.role) && principal.kind !== 'pipeline') throw new RuleError('此身份只有消費權限，不能提交知識', 403, 'forbidden');
+    if (!principal) throw new RuleError(tr('需要身份驗證'), 401, 'unauthorized');
+    if (!principal.isAdmin && !['contributor', 'owner'].includes(principal.role) && principal.kind !== 'pipeline') throw new RuleError(tr('此身份只有消費權限，不能提交知識'), 403, 'forbidden');
   }
 
   assertOwner(principal, subject) {
-    if (!principal) throw new RuleError('需要身份驗證', 401, 'unauthorized');
-    if (principal.kind === 'agent') throw new RuleError('智能體不能晉升、裁決或判定失效；請由負責人確認或通過 Action 校驗', 403, 'agent_cannot_promote');
-    if (principal.kind === 'pipeline') throw new RuleError('管道只能按校驗結果定級自己同步的知識', 403, 'forbidden');
-    if (!principal.isAdmin && principal.role !== 'owner') throw new RuleError('只有負責人可以執行此操作', 403, 'forbidden');
-    if (!principal.isAdmin && subject?.ownerIds?.length && !subject.ownerIds.includes(principal.id)) throw new RuleError(`你不是 ${subject.id} 的指定負責人`, 403, 'forbidden');
+    if (!principal) throw new RuleError(tr('需要身份驗證'), 401, 'unauthorized');
+    if (principal.kind === 'agent') throw new RuleError(tr('智能體不能晉升、裁決或判定失效；請由負責人確認或通過 Action 校驗'), 403, 'agent_cannot_promote');
+    if (principal.kind === 'pipeline') throw new RuleError(tr('管道只能按校驗結果定級自己同步的知識'), 403, 'forbidden');
+    if (!principal.isAdmin && principal.role !== 'owner') throw new RuleError(tr('只有負責人可以執行此操作'), 403, 'forbidden');
+    if (!principal.isAdmin && subject?.ownerIds?.length && !subject.ownerIds.includes(principal.id)) throw new RuleError(tr('你不是 {id} 的指定負責人', { id: subject.id }), 403, 'forbidden');
   }
 
   // ---------------------------------------------------------------- 驗證輔助
   validateEvidence(evidence, t) {
     const e = { objectIds: [], actionId: null, sourceRef: null, ...(evidence || {}) };
     e.objectIds = (Array.isArray(e.objectIds) ? e.objectIds : [e.objectIds]).filter(Boolean).map(String);
-    for (const oid of e.objectIds) if (!this.objects.has(oid)) throw new RuleError(`證據客體 ${oid} 不存在；請先登記客體`, 422, 'unknown_object');
-    if (e.actionId && !this.actions.has(e.actionId)) throw new RuleError(`Action ${e.actionId} 不存在`, 422, 'unknown_action');
+    for (const oid of e.objectIds) if (!this.objects.has(oid)) throw new RuleError(tr('證據客體 {id} 不存在；請先登記客體', { id: oid }), 422, 'unknown_object');
+    if (e.actionId && !this.actions.has(e.actionId)) throw new RuleError(tr('Action {id} 不存在', { id: e.actionId }), 422, 'unknown_action');
     e.sourceRef = clean(e.sourceRef) || null;
-    for (const oid of e.objectIds) if (this.objects.get(oid).status === '下線') t?.warn(`證據客體 ${oid} 已下線`);
+    for (const oid of e.objectIds) if (this.objects.get(oid).status === '下線') t?.warn(tr('證據客體 {id} 已下線', { id: oid }));
     return e;
   }
 
@@ -624,13 +625,13 @@ export class KnowledgeStore {
   createSubject(t, input, principal) {
     this.assertCanContribute(principal);
     const name = clean(input.name);
-    if (!name) throw new RuleError('主體名稱必填', 400, 'invalid_input');
-    if (!SUBJECT_TYPES[input.type]) throw new RuleError(`主體類型必須為：${Object.keys(SUBJECT_TYPES).join('、')}`, 400, 'invalid_type');
+    if (!name) throw new RuleError(tr('主體名稱必填'), 400, 'invalid_input');
+    if (!SUBJECT_TYPES[input.type]) throw new RuleError(tr('主體類型必須為：{list}', { list: Object.keys(SUBJECT_TYPES).join('、') }), 400, 'invalid_type');
     const dup = [...this.subjects.values()].find(s => s.name.toLowerCase() === name.toLowerCase());
-    if (dup) throw new RuleError(`名稱「${name}」已被 ${dup.id}（${dup.type}）使用；同名概念請用別名或更精確的規範名`, 409, 'duplicate_name');
+    if (dup) throw new RuleError(tr('名稱「{name}」已被 {id}（{type}）使用；同名概念請用別名或更精確的規範名', { name, id: dup.id, type: dup.type }), 409, 'duplicate_name');
     const domainCode = clean(input.domain) || this.config.domains[0]?.code || 'GEN';
-    if (!this.config.domains.some(d => d.code === domainCode)) throw new RuleError(`未知領域 ${domainCode}；可用：${this.config.domains.map(d => d.code).join(', ')}`, 400, 'invalid_domain');
-    if (input.type !== '別名' && !clean(input.definition)) t.warn('建議填寫定義：一句話說明它是什麼、不是什麼');
+    if (!this.config.domains.some(d => d.code === domainCode)) throw new RuleError(tr('未知領域 {domain}；可用：{list}', { domain: domainCode, list: this.config.domains.map(d => d.code).join(', ') }), 400, 'invalid_domain');
+    if (input.type !== '別名' && !clean(input.definition)) t.warn(tr('建議填寫定義：一句話說明它是什麼、不是什麼'));
     const id = this.nextId(`${ID_PREFIX.subject}-${domainCode}`);
     const s = {
       id, name, type: input.type, domain: domainCode,
@@ -647,7 +648,7 @@ export class KnowledgeStore {
     t.touch('subject', id);
     if (s.type === '別名') {
       const targets = Array.isArray(input.aliasOf) ? input.aliasOf : input.aliasOf ? [input.aliasOf] : [];
-      if (!targets.length) t.warn('別名主體應通過「別名」關係指向至少一個規範主體（aliasOf）');
+      if (!targets.length) t.warn(tr('別名主體應通過「別名」關係指向至少一個規範主體（aliasOf）'));
       for (const to of targets) this.createRelation(t, { from: id, type: '別名', to, level: input.aliasLevel, evidence: input.evidence }, principal);
     }
     return s;
@@ -656,12 +657,12 @@ export class KnowledgeStore {
   updateSubject(t, id, patch, principal) {
     this.assertCanContribute(principal);
     const s = this.getSubject(id);
-    if (patch.type && patch.type !== s.type) throw new RuleError('主體類型不可修改；請新建主體並把舊主體相關知識轉為 E1', 409, 'immutable_type');
+    if (patch.type && patch.type !== s.type) throw new RuleError(tr('主體類型不可修改；請新建主體並把舊主體相關知識轉為 E1'), 409, 'immutable_type');
     if (patch.name !== undefined) {
       const name = clean(patch.name);
-      if (!name) throw new RuleError('名稱不可為空', 400);
+      if (!name) throw new RuleError(tr('名稱不可為空'), 400);
       const dup = [...this.subjects.values()].find(x => x.id !== id && x.name.toLowerCase() === name.toLowerCase());
-      if (dup) throw new RuleError(`名稱「${name}」已被 ${dup.id} 使用`, 409, 'duplicate_name');
+      if (dup) throw new RuleError(tr('名稱「{name}」已被 {id} 使用', { name, id: dup.id }), 409, 'duplicate_name');
       s.name = name;
     }
     for (const k of ['definition', 'owner']) if (patch[k] !== undefined) s[k] = clean(patch[k]) || null;
@@ -681,7 +682,7 @@ export class KnowledgeStore {
   }
 
   deleteSubject(t, id, principal) {
-    if (!principal?.isAdmin) throw new RuleError('只有管理員可以刪除主體（正常情況請將知識轉為 E1，E1 不刪除）', 403, 'forbidden');
+    if (!principal?.isAdmin) throw new RuleError(tr('只有管理員可以刪除主體（正常情況請將知識轉為 E1，E1 不刪除）'), 403, 'forbidden');
     this.getSubject(id);
     for (const r of [...this.relations.values()]) if (r.from === id || r.to === id) { this.relations.delete(r.id); t.remove('relation', r.id); }
     const s = this.subjects.get(id);
@@ -694,16 +695,16 @@ export class KnowledgeStore {
   createObject(t, input, principal) {
     this.assertCanContribute(principal);
     const name = clean(input.name);
-    if (!name) throw new RuleError('客體名稱必填', 400, 'invalid_input');
-    if (!OBJECT_CATEGORIES[input.category]) throw new RuleError(`客體類別必須為：${Object.keys(OBJECT_CATEGORIES).join('、')}`, 400, 'invalid_category');
+    if (!name) throw new RuleError(tr('客體名稱必填'), 400, 'invalid_input');
+    if (!OBJECT_CATEGORIES[input.category]) throw new RuleError(tr('客體類別必須為：{list}', { list: Object.keys(OBJECT_CATEGORIES).join('、') }), 400, 'invalid_category');
     const locator = clean(input.locator) || null;
     if (locator) {
       const dup = [...this.objects.values()].find(o => o.category === input.category && o.locator === locator && o.status !== '下線');
-      if (dup) throw new RuleError(`定位 ${locator} 已登記為 ${dup.id}`, 409, 'duplicate_object');
+      if (dup) throw new RuleError(tr('定位 {locator} 已登記為 {id}', { locator, id: dup.id }), 409, 'duplicate_object');
     }
     const actionIds = (input.actionIds || []).map(String);
-    for (const a of actionIds) if (!this.actions.has(a)) throw new RuleError(`Action ${a} 不存在`, 422, 'unknown_action');
-    if (input.category === '物理' && actionIds.length) t.warn('物理客體在 MVP 只登記，不接管道');
+    for (const a of actionIds) if (!this.actions.has(a)) throw new RuleError(tr('Action {id} 不存在', { id: a }), 422, 'unknown_action');
+    if (input.category === '物理' && actionIds.length) t.warn(tr('物理客體在 MVP 只登記，不接管道'));
     const id = this.nextId(ID_PREFIX.object);
     const o = {
       id, name, category: input.category, kind: clean(input.kind) || null, locator,
@@ -728,16 +729,16 @@ export class KnowledgeStore {
         const uses = ref.kind === 'binding' ? ref.item.objectId === o.id : v.evidence.objectIds.includes(o.id);
         if (uses && v.level !== 'E1' && demoteToL1(v, 'object_changed', { by, note: `客體 ${o.id} 定位變更` })) this.touchItem(t, ref);
       }
-      t.warn(`客體 ${o.id} 定位已變更：相關綁定與證據知識已降為 L1，需重新校驗或確認`);
+      t.warn(tr('客體 {id} 定位已變更：相關綁定與證據知識已降為 L1，需重新校驗或確認', { id: o.id }));
     }
     if (patch.actionIds !== undefined) {
-      for (const a of patch.actionIds) if (!this.actions.has(a)) throw new RuleError(`Action ${a} 不存在`, 422, 'unknown_action');
+      for (const a of patch.actionIds) if (!this.actions.has(a)) throw new RuleError(tr('Action {id} 不存在', { id: a }), 422, 'unknown_action');
       o.actionIds = patch.actionIds;
     }
     if (patch.status !== undefined && patch.status !== o.status) {
-      if (!OBJECT_STATUS.includes(patch.status)) throw new RuleError('狀態必須為 在用 / 下線', 400);
+      if (!OBJECT_STATUS.includes(patch.status)) throw new RuleError(tr('狀態必須為 在用 / 下線'), 400);
       if (patch.status === '下線') this.takeObjectOffline(t, o, patch.reason || '客體下線', principal);
-      else { o.status = '在用'; t.warn('客體恢復在用；已轉為 E1 的綁定不會自動恢復，請重新提交綁定'); }
+      else { o.status = '在用'; t.warn(tr('客體恢復在用；已轉為 E1 的綁定不會自動恢復，請重新提交綁定')); }
     }
     o.updatedAt = nowIso();
     t.touch('object', id);
@@ -770,9 +771,9 @@ export class KnowledgeStore {
   }
 
   deleteObject(t, id, principal) {
-    if (!principal?.isAdmin) throw new RuleError('只有管理員可以刪除客體（正常情況請標記下線）', 403, 'forbidden');
+    if (!principal?.isAdmin) throw new RuleError(tr('只有管理員可以刪除客體（正常情況請標記下線）'), 403, 'forbidden');
     this.getObject(id);
-    if (this.bindingsOfObject(id).length) throw new RuleError('客體仍被綁定，不能刪除；請改為標記下線', 409, 'in_use');
+    if (this.bindingsOfObject(id).length) throw new RuleError(tr('客體仍被綁定，不能刪除；請改為標記下線'), 409, 'in_use');
     this.objects.delete(id);
     t.remove('object', id);
   }
@@ -780,9 +781,9 @@ export class KnowledgeStore {
   createBinding(t, subjectId, input, principal) {
     this.assertCanContribute(principal);
     const s = this.getSubject(subjectId);
-    if (s.type === '別名') throw new RuleError('別名主體自身不掛客體、斷言或其他關係；知識只掛在規範主體上', 422, 'alias_rule');
+    if (s.type === '別名') throw new RuleError(tr('別名主體自身不掛客體、斷言或其他關係；知識只掛在規範主體上'), 422, 'alias_rule');
     const o = this.getObject(input.objectId);
-    if (s.bindings.some(b => b.objectId === o.id && b.validity.level !== 'E1')) throw new RuleError(`${s.id} 已綁定客體 ${o.id}`, 409, 'duplicate_binding');
+    if (s.bindings.some(b => b.objectId === o.id && b.validity.level !== 'E1')) throw new RuleError(tr('{subject} 已綁定客體 {object}', { subject: s.id, object: o.id }), 409, 'duplicate_binding');
     const evidence = { ...(input.evidence || {}), objectIds: [o.id, ...((input.evidence?.objectIds) || []).filter(x => x !== o.id)] };
     const b = { id: this.nextId(ID_PREFIX.binding), objectId: o.id, note: clean(input.note) || null, createdAt: nowIso() };
     b.validity = this.buildValidity({ ...input, evidence }, principal, t);
@@ -798,18 +799,18 @@ export class KnowledgeStore {
   createAssertion(t, subjectId, input, principal) {
     this.assertCanContribute(principal);
     const s = this.getSubject(subjectId);
-    if (s.type === '別名') throw new RuleError('別名主體自身不掛客體、斷言或其他關係；請把斷言掛在規範主體上', 422, 'alias_rule');
-    if (!ASSERTION_TYPES[input.type]) throw new RuleError(`斷言類型必須為：${Object.keys(ASSERTION_TYPES).join('、')}`, 400, 'invalid_type');
+    if (s.type === '別名') throw new RuleError(tr('別名主體自身不掛客體、斷言或其他關係；請把斷言掛在規範主體上'), 422, 'alias_rule');
+    if (!ASSERTION_TYPES[input.type]) throw new RuleError(tr('斷言類型必須為：{list}', { list: Object.keys(ASSERTION_TYPES).join('、') }), 400, 'invalid_type');
     const content = clean(input.content);
-    if (!content) throw new RuleError('斷言內容必填（自然語言一句話）', 400, 'invalid_input');
-    if ((content.match(/[。；;]/g) || []).length > 1) t.warn('一條斷言只說一件事；內容看起來包含多個陳述，建議拆分以便單獨驗證、單獨失效');
+    if (!content) throw new RuleError(tr('斷言內容必填（自然語言一句話）'), 400, 'invalid_input');
+    if ((content.match(/[。；;]/g) || []).length > 1) t.warn(tr('一條斷言只說一件事；內容看起來包含多個陳述，建議拆分以便單獨驗證、單獨失效'));
     const dup = s.assertions.find(a => a.content === content && a.validity.level !== 'E1');
-    if (dup) throw new RuleError(`相同內容的斷言已存在：${dup.id}`, 409, 'duplicate_assertion');
-    if (input.replacedBy && !this.assertionIndex.has(input.replacedBy)) throw new RuleError(`替代者 ${input.replacedBy} 不存在`, 422, 'unknown_replacement');
+    if (dup) throw new RuleError(tr('相同內容的斷言已存在：{id}', { id: dup.id }), 409, 'duplicate_assertion');
+    if (input.replacedBy && !this.assertionIndex.has(input.replacedBy)) throw new RuleError(tr('替代者 {id} 不存在', { id: input.replacedBy }), 422, 'unknown_replacement');
     const a = { id: this.nextId(ID_PREFIX.assertion), type: input.type, content, structured: input.structured && input.structured.key ? { key: String(input.structured.key), value: input.structured.value } : null, createdAt: nowIso() };
     a.validity = this.buildValidity(input, principal, t);
     const bound = new Set(s.bindings.map(b => b.objectId));
-    for (const oid of a.validity.evidence.objectIds) if (!bound.has(oid)) t.warn(`證據客體 ${oid} 尚未綁定到 ${s.id}；斷言的證據通常是主體已綁定的客體`);
+    for (const oid of a.validity.evidence.objectIds) if (!bound.has(oid)) t.warn(tr('證據客體 {object} 尚未綁定到 {subject}；斷言的證據通常是主體已綁定的客體', { object: oid, subject: s.id }));
     this.finalizePipelineL0(a.validity, 'assertion', a, s, principal);
     s.assertions.push(a);
     this.assertionIndex.set(a.id, s.id);
@@ -821,14 +822,14 @@ export class KnowledgeStore {
   updateAssertion(t, id, patch, principal) {
     this.assertCanContribute(principal);
     const ref = this.getItem(id);
-    if (ref.kind !== 'assertion') throw new RuleError(`${id} 不是斷言`, 400);
+    if (ref.kind !== 'assertion') throw new RuleError(tr('{id} 不是斷言', { id }), 400);
     const a = ref.item;
-    if (a.validity.level === 'E1') throw new RuleError('E1 知識不修改；請提交新斷言作為替代者', 409, 'invalid_transition');
+    if (a.validity.level === 'E1') throw new RuleError(tr('E1 知識不修改；請提交新斷言作為替代者'), 409, 'invalid_transition');
     let changed = false;
     if (patch.content !== undefined && clean(patch.content) !== a.content) { a.content = clean(patch.content); changed = true; }
     if (patch.structured !== undefined) { a.structured = patch.structured?.key ? { key: String(patch.structured.key), value: patch.structured.value } : null; changed = true; }
     if (patch.type !== undefined && patch.type !== a.type) {
-      if (!ASSERTION_TYPES[patch.type]) throw new RuleError('未知斷言類型', 400);
+      if (!ASSERTION_TYPES[patch.type]) throw new RuleError(tr('未知斷言類型'), 400);
       a.type = patch.type; changed = true;
     }
     if (changed && principal.kind !== 'pipeline') {
@@ -836,7 +837,7 @@ export class KnowledgeStore {
       if (a.validity.level === 'L0' || a.validity.level === 'L1') {
         if (a.validity.level !== ceiling) transition(a.validity, ceiling, { reason: '內容修改，需重新驗證', by: sourceOf(principal).id });
         if (a.validity.level === 'L1') setPending(a.validity, 'object_changed', '內容修改，需重新驗證');
-        t.warn(`內容已修改，層級調整為 ${a.validity.level}，需重新校驗或確認`);
+        t.warn(tr('內容已修改，層級調整為 {level}，需重新校驗或確認', { level: a.validity.level }));
       }
     }
     a.updatedAt = nowIso();
@@ -848,16 +849,16 @@ export class KnowledgeStore {
   createRelation(t, input, principal) {
     this.assertCanContribute(principal);
     const def = RELATION_TYPES[input.type];
-    if (!def) throw new RuleError(`關係類型必須為閉集之一：${Object.keys(RELATION_TYPES).join('、')}；新增類型須經負責人評審`, 400, 'invalid_relation_type');
+    if (!def) throw new RuleError(tr('關係類型必須為閉集之一：{list}；新增類型須經負責人評審', { list: Object.keys(RELATION_TYPES).join('、') }), 400, 'invalid_relation_type');
     const from = this.getSubject(input.from);
     const to = this.getSubject(input.to);
-    if (from.id === to.id) throw new RuleError('關係的起點與終點不能相同', 422, 'self_relation');
-    if (from.type === '別名' && input.type !== '別名') throw new RuleError('別名主體只通過「別名」關係指向規範主體', 422, 'alias_rule');
+    if (from.id === to.id) throw new RuleError(tr('關係的起點與終點不能相同'), 422, 'self_relation');
+    if (from.type === '別名' && input.type !== '別名') throw new RuleError(tr('別名主體只通過「別名」關係指向規範主體'), 422, 'alias_rule');
     if (!def.from.includes(from.type) || !def.to.includes(to.type)) {
-      throw new RuleError(`「${input.type}」的方向為 ${def.direction}；${from.name}（${from.type}）→ ${to.name}（${to.type}）不符合`, 422, 'relation_direction');
+      throw new RuleError(tr('「{type}」的方向為 {direction}；{from}（{fromType}）→ {to}（{toType}）不符合', { type: input.type, direction: tr(def.direction), from: from.name, fromType: from.type, to: to.name, toType: to.type }), 422, 'relation_direction');
     }
     const dup = [...this.relations.values()].find(r => r.from === from.id && r.to === to.id && r.type === input.type && r.validity.level !== 'E1');
-    if (dup) throw new RuleError(`關係已存在：${dup.id}`, 409, 'duplicate_relation');
+    if (dup) throw new RuleError(tr('關係已存在：{id}', { id: dup.id }), 409, 'duplicate_relation');
     const r = { id: this.nextId(ID_PREFIX.relation), from: from.id, type: input.type, to: to.id, note: clean(input.note) || null, createdAt: nowIso() };
     r.validity = this.buildValidity(input, principal, t);
     if (r.type === '擁有' && r.validity.level === 'L0') this.assertSingleOwner(r);
@@ -868,15 +869,15 @@ export class KnowledgeStore {
   }
 
   deleteRelation(t, id, principal) {
-    if (!principal?.isAdmin) throw new RuleError('只有管理員可以刪除關係（正常情況請轉為 E1）', 403, 'forbidden');
-    if (!this.relations.has(id)) throw notFound('關係', id);
+    if (!principal?.isAdmin) throw new RuleError(tr('只有管理員可以刪除關係（正常情況請轉為 E1）'), 403, 'forbidden');
+    if (!this.relations.has(id)) throw notFound(tk('關係'), id);
     this.relations.delete(id);
     t.remove('relation', id);
   }
 
   assertSingleOwner(r) {
     const other = [...this.relations.values()].find(x => x.id !== r.id && x.type === '擁有' && x.to === r.to && x.validity.level === 'L0');
-    if (other) throw new RuleError(`每個業務對象或指標原則上只有一條 L0「擁有」關係；${r.to} 已有 ${other.id}。請先登記衝突並裁決`, 409, 'single_owner');
+    if (other) throw new RuleError(tr('每個業務對象或指標原則上只有一條 L0「擁有」關係；{to} 已有 {other}。請先登記衝突並裁決', { to: r.to, other: other.id }), 409, 'single_owner');
   }
 
   /** 補充證據：L2 → L1。 */
@@ -884,7 +885,7 @@ export class KnowledgeStore {
     this.assertCanContribute(principal);
     const ref = this.getItem(id);
     const v = ref.item.validity;
-    if (v.level === 'E1') throw new RuleError('E1 知識不再補充證據', 409, 'invalid_transition');
+    if (v.level === 'E1') throw new RuleError(tr('E1 知識不再補充證據'), 409, 'invalid_transition');
     const extra = this.validateEvidence(input, t);
     v.evidence.objectIds = [...new Set([...v.evidence.objectIds, ...extra.objectIds])];
     if (extra.sourceRef) v.evidence.sourceRef = extra.sourceRef;
@@ -899,7 +900,7 @@ export class KnowledgeStore {
     const ref = this.getItem(id);
     this.assertOwner(principal, ref.subject);
     const v = ref.item.validity;
-    if (ref.kind === 'binding' && this.objects.get(ref.item.objectId)?.status === '下線') throw new RuleError('客體已下線，綁定不能晉升', 409, 'object_offline');
+    if (ref.kind === 'binding' && this.objects.get(ref.item.objectId)?.status === '下線') throw new RuleError(tr('客體已下線，綁定不能晉升'), 409, 'object_offline');
     if (ref.kind === 'relation' && ref.item.type === '擁有') this.assertSingleOwner(ref.item);
     const at = nowIso();
     const days = Number(input?.expiryDays) || this.expiryDaysFor(ref.kind, ref.item, ref.subject);
@@ -952,11 +953,11 @@ export class KnowledgeStore {
     this.assertCanContribute(principal);
     const a = this.getItem(input.a);
     const b = this.getItem(input.b);
-    if (a.item.id === b.item.id) throw new RuleError('衝突的兩條知識不能相同', 400);
+    if (a.item.id === b.item.id) throw new RuleError(tr('衝突的兩條知識不能相同'), 400);
     const by = sourceOf(principal).id;
     const id = this.nextId(ID_PREFIX.conflict);
     for (const ref of [a, b]) {
-      if (ref.item.validity.level === 'E1') throw new RuleError(`${ref.item.id} 已是 E1，不參與衝突`, 409);
+      if (ref.item.validity.level === 'E1') throw new RuleError(tr('{id} 已是 E1，不參與衝突', { id: ref.item.id }), 409);
       demoteToL1(ref.item.validity, 'conflict', { by, note: `與 ${(ref === a ? b : a).item.id} 矛盾（${id}）` });
       this.touchItem(t, ref);
     }
@@ -969,10 +970,10 @@ export class KnowledgeStore {
   /** 裁決衝突：一方回到 L0，另一方轉為 E1。 */
   resolveConflict(t, id, input, principal) {
     const c = this.conflicts.get(id);
-    if (!c) throw notFound('衝突', id);
-    if (c.status !== 'open') throw new RuleError('衝突已裁決', 409);
+    if (!c) throw notFound(tk('衝突'), id);
+    if (c.status !== 'open') throw new RuleError(tr('衝突已裁決'), 409);
     const winnerId = input.winner;
-    if (![c.a, c.b].includes(winnerId)) throw new RuleError('winner 必須是衝突雙方之一', 400);
+    if (![c.a, c.b].includes(winnerId)) throw new RuleError(tr('winner 必須是衝突雙方之一'), 400);
     const loserId = winnerId === c.a ? c.b : c.a;
     const winner = this.getItem(winnerId);
     const loser = this.getItem(loserId);
@@ -988,10 +989,10 @@ export class KnowledgeStore {
   }
 
   submitFeedback(t, input, principal) {
-    if (!principal) throw new RuleError('需要身份驗證', 401, 'unauthorized');
+    if (!principal) throw new RuleError(tr('需要身份驗證'), 401, 'unauthorized');
     const targetId = clean(input.targetId);
     const comment = clean(input.comment);
-    if (!targetId || !comment) throw new RuleError('targetId 與 comment 必填', 400, 'invalid_input');
+    if (!targetId || !comment) throw new RuleError(tr('targetId 與 comment 必填'), 400, 'invalid_input');
     let wasLevel = null;
     let subjectId = null;
     const kind = kindOfId(targetId);
@@ -1024,8 +1025,8 @@ export class KnowledgeStore {
 
   closeFeedback(t, id, input, principal) {
     const f = this.feedback.get(id);
-    if (!f) throw notFound('反饋', id);
-    if (principal.kind === 'agent') throw new RuleError('智能體不能關閉反饋', 403, 'forbidden');
+    if (!f) throw notFound(tk('反饋'), id);
+    if (principal.kind === 'agent') throw new RuleError(tr('智能體不能關閉反饋'), 403, 'forbidden');
     f.status = 'resolved';
     f.resolution = clean(input?.resolution) || '已處理';
     f.resolvedAt = nowIso();
@@ -1053,7 +1054,7 @@ export class KnowledgeStore {
 
   closeGap(t, id, input) {
     const g = this.gaps.get(id);
-    if (!g) throw notFound('知識缺口', id);
+    if (!g) throw notFound(tk('知識缺口'), id);
     g.status = 'resolved';
     g.resolution = clean(input?.resolution) || '已補充知識';
     g.resolvedAt = nowIso();
@@ -1076,10 +1077,10 @@ export class KnowledgeStore {
   // ---------------------------------------------------------------- Action 與管道
   upsertPipeline(t, input, principal) {
     this.assertOwner(principal);
-    if (!PIPELINE_TYPES[input.type]) throw new RuleError(`管道類型必須為：${Object.keys(PIPELINE_TYPES).join('、')}`, 400);
-    if (!clean(input.name)) throw new RuleError('管道名稱必填', 400);
-    if (input.type === 'http' && !/^https?:\/\//.test(input.baseUrl || '')) throw new RuleError('http 管道需要 baseUrl（http/https）', 400);
-    for (const v of Object.values(input.headers || {})) if (/^(bearer|basic)\s+[a-z0-9._-]{12,}/i.test(String(v)) && !String(v).includes('${env:')) throw new RuleError('請勿把憑證明文寫入知識倉庫；使用 ${env:變數名} 引用環境變數', 400, 'secret_in_repo');
+    if (!PIPELINE_TYPES[input.type]) throw new RuleError(tr('管道類型必須為：{list}', { list: Object.keys(PIPELINE_TYPES).join('、') }), 400);
+    if (!clean(input.name)) throw new RuleError(tr('管道名稱必填'), 400);
+    if (input.type === 'http' && !/^https?:\/\//.test(input.baseUrl || '')) throw new RuleError(tr('http 管道需要 baseUrl（http/https）'), 400);
+    for (const v of Object.values(input.headers || {})) if (/^(bearer|basic)\s+[a-z0-9._-]{12,}/i.test(String(v)) && !String(v).includes('${env:')) throw new RuleError(tr('請勿把憑證明文寫入知識倉庫；使用 ${env:變數名} 引用環境變數'), 400, 'secret_in_repo');
     const id = input.id && this.pipelines.has(input.id) ? input.id : this.nextId(ID_PREFIX.pipeline);
     const p = { id, name: clean(input.name), type: input.type, description: clean(input.description) || null, baseUrl: clean(input.baseUrl) || null, headers: input.headers || {}, timeoutMs: Number(input.timeoutMs) || 8000, routes: Array.isArray(input.routes) ? input.routes : [], updatedAt: nowIso() };
     this.pipelines.set(id, p);
@@ -1089,10 +1090,10 @@ export class KnowledgeStore {
 
   upsertAction(t, input, principal) {
     this.assertOwner(principal);
-    if (!ACTION_KINDS[input.kind]) throw new RuleError('Action 種類必須為 校驗 / 取值（MVP 只讀不寫）', 400);
-    if (!clean(input.name)) throw new RuleError('Action 名稱必填', 400);
-    if (!this.pipelines.has(input.pipelineId)) throw new RuleError(`管道 ${input.pipelineId} 不存在`, 422);
-    if (input.request?.method && !['GET', 'HEAD', 'POST'].includes(String(input.request.method).toUpperCase())) throw new RuleError('MVP 只讀：請求方法限 GET / HEAD / POST（查詢類）', 400);
+    if (!ACTION_KINDS[input.kind]) throw new RuleError(tr('Action 種類必須為 校驗 / 取值（MVP 只讀不寫）'), 400);
+    if (!clean(input.name)) throw new RuleError(tr('Action 名稱必填'), 400);
+    if (!this.pipelines.has(input.pipelineId)) throw new RuleError(tr('管道 {id} 不存在', { id: input.pipelineId }), 422);
+    if (input.request?.method && !['GET', 'HEAD', 'POST'].includes(String(input.request.method).toUpperCase())) throw new RuleError(tr('MVP 只讀：請求方法限 GET / HEAD / POST（查詢類）'), 400);
     const id = input.id && this.actions.has(input.id) ? input.id : this.nextId(ID_PREFIX.action);
     const a = {
       id, name: clean(input.name), kind: input.kind, description: clean(input.description) || null,
@@ -1125,9 +1126,9 @@ export class KnowledgeStore {
   }
 
   updateConfig(t, patch, principal) {
-    if (!principal?.isAdmin) throw new RuleError('只有管理員可以修改規則參數', 403, 'forbidden');
+    if (!principal?.isAdmin) throw new RuleError(tr('只有管理員可以修改規則參數'), 403, 'forbidden');
     if (patch.domains) {
-      if (!Array.isArray(patch.domains) || patch.domains.some(d => !/^[A-Z]{2,6}$/.test(d.code) || !d.name)) throw new RuleError('領域代碼須為 2–6 個大寫字母，並有名稱', 400);
+      if (!Array.isArray(patch.domains) || patch.domains.some(d => !/^[A-Z]{2,6}$/.test(d.code) || !d.name)) throw new RuleError(tr('領域代碼須為 2–6 個大寫字母，並有名稱'), 400);
       this.config.domains = patch.domains;
     }
     if (patch.expiryDays) {
@@ -1150,7 +1151,7 @@ export class KnowledgeStore {
       out.push({
         id: ref.item.id, kind: ref.kind, level: v.level, pending: v.pending,
         subject: this.subjectSummary(ref.subject),
-        summary: ref.kind === 'assertion' ? ref.item.content : ref.kind === 'binding' ? `綁定客體 ${ref.item.objectId}（${this.objects.get(ref.item.objectId)?.name || '?'}）` : `${this.subjects.get(ref.item.from)?.name} –${ref.item.type}→ ${this.subjects.get(ref.item.to)?.name}`,
+        summary: ref.kind === 'assertion' ? ref.item.content : ref.kind === 'binding' ? tr('綁定客體 {id}（{name}）', { id: ref.item.objectId, name: this.objects.get(ref.item.objectId)?.name || '?' }) : `${this.subjects.get(ref.item.from)?.name} –${ref.item.type}→ ${this.subjects.get(ref.item.to)?.name}`,
         usage, errorCost: cost, priority: (usage + 1) * cost,
         hasValidateAction: !!(v.evidence.actionId || this.findValidateAction(ref))
       });
@@ -1214,7 +1215,7 @@ export class KnowledgeStore {
     const fb = [...this.feedback.values()];
     const queue = this.revalidationQueue();
     return {
-      l0Coverage: { value: hot.length ? covered / hot.length : null, covered, total: hot.length, basis: used.length ? `被高頻問到的前 ${Math.round(ratio * 100)}% 主體` : '尚無使用數據，按全部規範主體計算' },
+      l0Coverage: { value: hot.length ? covered / hot.length : null, covered, total: hot.length, basis: used.length ? tr('被高頻問到的前 {pct}% 主體', { pct: Math.round(ratio * 100) }) : tr('尚無使用數據，按全部規範主體計算') },
       pendingRevalidation: { value: queue.length, byReason: queue.reduce((m, q) => ({ ...m, [q.pending.reason]: (m[q.pending.reason] || 0) + 1 }), {}) },
       uncoveredQueries: { value: gaps.reduce((n, g) => n + (g.occurrences || []).filter(o => Date.parse(o.at) >= since).length, 0), total: gaps.reduce((n, g) => n + (g.count || 0), 0), openGaps: gaps.filter(g => g.status === 'open').length },
       l0ErrorFeedback: { value: fb.filter(f => f.wasLevel === 'L0' && Date.parse(f.createdAt) >= since).length, total: fb.filter(f => f.wasLevel === 'L0').length },

@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { DEVNULL, isSshUrl } from './ssh.js';
+import { tr } from '../i18n/index.js';
 
 function run(args, { cwd, env, timeout = 120000 } = {}) {
   return new Promise((resolve, reject) => {
@@ -12,7 +13,7 @@ function run(args, { cwd, env, timeout = 120000 } = {}) {
       if (err) {
         err.stdout = stdout;
         err.stderr = stderr;
-        err.message = `git ${args.filter(a => !a.startsWith('http.extraHeader')).join(' ')} 失敗：${(stderr || err.message).trim()}`;
+        err.message = tr('{command} 失敗：{error}', { command: `git ${args.filter(a => !a.startsWith('http.extraHeader')).join(' ')}`, error: (stderr || err.message).trim() });
         reject(err);
       } else resolve(stdout);
     });
@@ -30,13 +31,13 @@ function redact(text, token) {
 export function explainSshError(message) {
   const m = String(message || '');
   const hints = [];
-  if (/marked as read only|read[- ]only deploy key|write access .* not granted/i.test(m)) hints.push('部署金鑰沒有寫入權限：到倉庫 Settings › Deploy keys 編輯這把金鑰，勾選 Allow write access');
-  else if (/Permission denied \(publickey|Permission denied, please try again|publickey\)/i.test(m)) hints.push('遠端不接受這把部署金鑰：把後台「SSH 部署金鑰」中的公鑰添加到倉庫 Settings › Deploy keys（需寫入時勾選 Allow write access），並確認倉庫地址正確');
-  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(m)) hints.push('主機指紋與首次連接時記下的不一致：確認主機確實更換了金鑰後，到後台「SSH 部署金鑰」清除主機指紋再重試');
-  if (/Could not resolve hostname|Connection refused|Connection timed out|Network is unreachable|Operation timed out|No route to host/i.test(m)) hints.push('無法連接 SSH 端口：若網絡只放行 443，GitHub 可改用 ssh://git@ssh.github.com:443/<owner>/<repo>.git');
-  if (/Repository not found|does not appear to be a git repository|ERROR: Repository/i.test(m)) hints.push('找不到倉庫或部署金鑰不屬於這個倉庫：部署金鑰只能訪問添加了它的那一個倉庫');
-  if (/cannot run ssh|(?:^|[\s:])ssh: not found/im.test(m)) hints.push('找不到 ssh 客戶端：請在伺服器安裝 OpenSSH');
-  return hints.length ? `${m}\n提示：${hints.join('；')}` : m;
+  if (/marked as read only|read[- ]only deploy key|write access .* not granted/i.test(m)) hints.push(tr('部署金鑰沒有寫入權限：到倉庫 Settings › Deploy keys 編輯這把金鑰，勾選 Allow write access'));
+  else if (/Permission denied \(publickey|Permission denied, please try again|publickey\)/i.test(m)) hints.push(tr('遠端不接受這把部署金鑰：把後台「SSH 部署金鑰」中的公鑰添加到倉庫 Settings › Deploy keys（需寫入時勾選 Allow write access），並確認倉庫地址正確'));
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(m)) hints.push(tr('主機指紋與首次連接時記下的不一致：確認主機確實更換了金鑰後，到後台「SSH 部署金鑰」清除主機指紋再重試'));
+  if (/Could not resolve hostname|Connection refused|Connection timed out|Network is unreachable|Operation timed out|No route to host/i.test(m)) hints.push(tr('無法連接 SSH 端口：若網絡只放行 443，GitHub 可改用 {url}', { url: 'ssh://git@ssh.github.com:443/<owner>/<repo>.git' }));
+  if (/Repository not found|does not appear to be a git repository|ERROR: Repository/i.test(m)) hints.push(tr('找不到倉庫或部署金鑰不屬於這個倉庫：部署金鑰只能訪問添加了它的那一個倉庫'));
+  if (/cannot run ssh|(?:^|[\s:])ssh: not found/im.test(m)) hints.push(tr('找不到 ssh 客戶端：請在伺服器安裝 OpenSSH'));
+  return hints.length ? `${m}\n${tr('提示：{hints}', { hints: hints.join(tr('；')) })}` : m;
 }
 
 export class GitRepo {
@@ -179,7 +180,7 @@ export class GitRepo {
           await this.git(['rebase', `origin/${this.branch}`]);
         } catch (err) {
           await this.git(['rebase', '--abort']).catch(() => {});
-          throw new Error(`與遠端分支合併衝突，已中止 rebase，請在倉庫中手動解決：${err.message}`);
+          throw new Error(tr('與遠端分支合併衝突，已中止 rebase，請在倉庫中手動解決：{error}', { error: err.message }));
         }
       }
       this.status.lastPullAt = new Date().toISOString();

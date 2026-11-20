@@ -14,6 +14,7 @@
     "seed": "node scripts/seed.js",
     "ssh-key": "node scripts/ssh-key.js",
     "test": "node --test --test-concurrency=1 \"test/**/*.test.js\"",
+    "i18n:check": "node scripts/i18n-check.js",
     "release:build": "bash release/build.sh",
     "release:smoke": "bash release/test/smoke.sh"
   },
