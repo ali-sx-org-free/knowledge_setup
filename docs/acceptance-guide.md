@@ -9,6 +9,7 @@
 | 生產型 API（三方智能體提交知識） | [D](#d-公開端點與權限)、[E](#e-生產型-api) |
 | 教程 prompt API（智能體自學） | [D](#d-公開端點與權限) |
 | 消費型 API（結構化知識 + 自然語言答案） | [C](#c-消費型-api問答)、[H](#h-openrouter-自然語言可選) |
+| 一鍵安裝（release 包，測速選鏡像）與 CI 流水綫 | [J](#j-一鍵安裝與-ci-流水綫) |
 
 > 本教程的每條命令和預期結果，都已在全新環境中按本文順序實際跑過一遍。截圖來自同一次運行。
 
@@ -25,6 +26,7 @@
 - [G. Git 持久化與遠端倉庫](#g-git-持久化與遠端倉庫)
 - [H. OpenRouter 自然語言（可選）](#h-openrouter-自然語言可選)
 - [I. 容器部署（可選）](#i-容器部署可選)
+- [J. 一鍵安裝與 CI 流水綫](#j-一鍵安裝與-ci-流水綫)
 - [驗收記錄表](#驗收記錄表)
 - [常見問題](#常見問題)
 - [附錄：示例資料 ID 速查](#附錄示例資料-id-速查)
@@ -55,6 +57,8 @@ npm install
 ```
 
 **預期**：`npm install` 結束時沒有 `ERR!`。
+
+> 只想把服務跑起來、不跑第 1 節的自動化測試時，也可以不 clone，用 [J1 一鍵安裝](#j1-一鍵安裝並啟動) 安裝並啟動，再從 A2 開始驗收。注意一鍵安裝的服務資料在安裝目錄的 `data/` 下（Linux / macOS：`~/.knowledge_setup/data`），不是倉庫下的 `data/`。
 
 > 驗收過程會產生資料，預設寫在倉庫下的 `data/` 目錄。想從頭再來一遍，停掉服務後刪除 `data/` 即可（見 [常見問題](#常見問題)）。
 
@@ -566,6 +570,102 @@ docker run -p 8080:8080 -v knowledge-data:/data -e ADMIN_PASSWORD='Acceptance-20
 
 ---
 
+## J. 一鍵安裝與 CI 流水綫
+
+> 一鍵安裝從 GitHub Release 下載發佈包，需要倉庫已經發佈過版本（推送 `v*` 標籤後自動發佈，見 J5）。還沒有發佈版本時，J1～J3 可以改用 `--ref main` 從源碼安裝（見 J1 末尾）。
+>
+> 本節編寫時還沒有發佈版本，編寫環境也連不上國內鏡像：J1～J4 的流程是用本機模擬的下載來源（正常、不可達、很慢、發佈包被篡改）和真實的 nodejs.org 驗證的，與 CI 中的冒煙測試相同；國內鏡像的實際速度請以你的運行結果為準。
+
+### J1 一鍵安裝並啟動
+
+如果 A 章節的服務還在運行，先停掉它（或用 `--port` 換一個端口），避免端口衝突。
+
+Linux / macOS：
+
+```bash
+curl -fsSL https://github.com/ali-sx-org-free/knowledge_setup/releases/latest/download/install.sh | bash
+# GitHub 慢或打不開時：
+curl -fsSL https://ghfast.top/https://github.com/ali-sx-org-free/knowledge_setup/releases/latest/download/install.sh | bash
+```
+
+Windows PowerShell：
+
+```powershell
+$f="$env:TEMP\knowledge-install.ps1"; curl.exe -fsSL -o $f https://github.com/ali-sx-org-free/knowledge_setup/releases/latest/download/install.ps1; powershell -NoProfile -ExecutionPolicy Bypass -File $f
+```
+
+**預期**（數值與來源因網絡而異）：
+
+```
+==> 安裝 knowledge_setup 到 /home/you/.knowledge_setup
+    Node.js v22.x.x（系統已安裝：/usr/bin/node）
+==> 取得發佈資訊（ali-sx-org-free/knowledge_setup · latest）
+    不可用（已跳過）：gh.llkk.cc
+    版本 v0.1.0
+==> 測試下載速度：發佈包 v0.1.0
+    github.com                   180 KB/s
+    ghfast.top                   2.3 MB/s
+    gh-proxy.com                 1.1 MB/s
+    ghproxy.net                  無法連接
+==> 下載發佈包 v0.1.0（來源 ghfast.top）
+    SHA-256 校驗通過
+==> 已安裝 v0.1.0
+==> knowledge_setup v0.1.0 已啟動（PID 12345）
+    管理後台：http://localhost:8080
+    智能體教程：http://localhost:8080/api/v1/prompt
+    初始管理員密碼：xxxxxxxxxxxx（登入後可在「設定」修改，修改後以新密碼為準）
+```
+
+- 有「測試下載速度」列表，下載用的是列表中最快的來源，並顯示「SHA-256 校驗通過」。
+- 機器上沒有 Node.js 20+ 時，會先出現「測試下載速度： Node.js v22…」，從最快的 Node.js 鏡像下載到安裝目錄的 `runtime/node`；系統原有的 Node.js 不受影響。
+- 用顯示的地址和密碼可以登入後台（同 A2）。
+
+還沒有發佈版本時，從 main 分支源碼安裝（依賴從測速最快的 npm 鏡像安裝）：
+
+```bash
+curl -fsSL https://ghfast.top/https://raw.githubusercontent.com/ali-sx-org-free/knowledge_setup/main/release/install.sh | bash -s -- --ref main
+```
+
+### J2 服務管理
+
+新開一個終端（Windows 需要新開，才能讀到新的 PATH），執行：
+
+```bash
+knowledge status    # 預期：運行中（PID …）· v0.1.0，並顯示地址與初始密碼
+knowledge logs      # 預期：日誌中有「[knowledge] 服務已啟動」
+knowledge restart   # 預期：服務已停止 → 已啟動
+knowledge stop      # 預期：服務已停止；再 status 顯示「未運行」
+knowledge start
+```
+
+Linux / macOS 上 `~/.local/bin` 不在 PATH 時，安裝結束會提示用完整路徑 `~/.knowledge_setup/bin/knowledge`，或把它加入 PATH。
+
+### J3 重複執行與升級（資料保留）
+
+1. 在後台建立一些資料（例如 B1 載入示例資料），記下主體數量。
+2. 再執行一次 J1 的安裝命令。**預期**：顯示「已是最新版本 v0.1.0」，服務 PID 不變。
+3. 加 `--force` 重裝（Windows：`-Force`），或發佈新版本後執行 `knowledge upgrade`。**預期**：「停止正在運行的舊版本」→「已安裝」→「已啟動」；登入密碼不變，主體數量不變，`config.env` 中你改過的設定還在。
+
+### J4 離線安裝
+
+在能上網的機器打開 [Releases](https://github.com/ali-sx-org-free/knowledge_setup/releases)，下載 `knowledge_setup-vX.Y.Z.tar.gz`（Windows：`.zip`）、`install.sh`（Windows：`install.ps1`）和 `SHA256SUMS`，放在同一目錄拷到目標機器：
+
+```bash
+bash install.sh --package knowledge_setup-v0.1.0.tar.gz
+# Windows：powershell -ExecutionPolicy Bypass -File install.ps1 -Package knowledge_setup-v0.1.0.zip
+```
+
+**預期**：「SHA-256 校驗通過」→「從本地發佈包安裝」→ 已啟動。目標機器需要已有 Node.js 20+（離線時無法下載）。
+
+### J5 CI 流水綫
+
+1. 打開任一 PR 的 **Checks**。**預期**：`CI` 下這些檢查全部通過：測試 · Node 22、測試 · Node 24、容器映像、打包發佈包、一鍵安裝 · ubuntu-latest、一鍵安裝 · macos-latest、一鍵安裝 · windows-latest。
+2. 點開「一鍵安裝 · ubuntu-latest」的日誌。**預期**：能看到模擬的被篡改來源測速最快、被選中後「SHA-256 校驗失敗 … 換下一個來源」，最後從正常來源下載成功，並以 `PASS` 結束。
+3. 發佈：確認 main 上 `package.json` 的 `version` 與要打的標籤一致（目前為 `0.1.0`，以後發新版先改它並合併），然後 `git tag v0.1.0 && git push origin v0.1.0`。**預期**：Actions 中 `Release` 流水綫通過；[Releases](https://github.com/ali-sx-org-free/knowledge_setup/releases) 出現該版本，附有 `knowledge_setup-v0.1.0.tar.gz`、`knowledge_setup-v0.1.0.zip`、`install.sh`、`install.ps1`、`SHA256SUMS` 五個檔案，說明中有一鍵安裝命令。
+4. （可選）標籤與 `package.json` 版本不一致時（例如打 `v9.9.9`）。**預期**：`Release` 失敗並提示「標籤 v9.9.9 與 package.json 的版本 … 不一致」，不會發佈。驗收後刪除這個標籤：`git push origin :refs/tags/v9.9.9`。
+
+---
+
 ## 驗收記錄表
 
 | 編號 | 驗收項 | 預期結果 | 結果 |
@@ -600,6 +700,11 @@ docker run -p 8080:8080 -v knowledge-data:/data -e ADMIN_PASSWORD='Acceptance-20
 | G5 | SSH 部署金鑰（PR #1 合併後） | 測試連接通過；推送與回拉正常；取消寫入權限時報 `marked as read only` | ☐ |
 | H | OpenRouter（可選） | 組織方式為 OpenRouter，引用經過校驗 | ☐ |
 | I | 容器部署（可選） | 容器內可登入，資料存於卷 | ☐ |
+| J1 | 一鍵安裝 | 測速列表、從最快來源下載並校驗、自動啟動並顯示地址與密碼 | ☐ |
+| J2 | 服務管理 | `knowledge status / logs / restart / stop / start` 正常 | ☐ |
+| J3 | 重複執行與升級 | 已是最新版本時不重啟；重裝後資料、密碼與設定保留 | ☐ |
+| J4 | 離線安裝 | 本地發佈包校驗通過並啟動 | ☐ |
+| J5 | CI 流水綫 | PR 檢查全綠；推送標籤自動發佈 5 個檔案；版本不一致時拒絕發佈 | ☐ |
 
 ---
 

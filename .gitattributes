@@ -1,0 +1,5 @@
+# 安裝腳本與啟動器的換行符固定，避免在 Windows 上 checkout 後 bash 腳本帶 CRLF 無法執行
+*.sh text eol=lf
+release/bin/knowledge text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf

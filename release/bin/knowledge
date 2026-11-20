@@ -1,0 +1,199 @@
+#!/usr/bin/env bash
+# knowledge_setup 啟動器（Linux / macOS）：knowledge start | stop | restart | status | logs | run | password | upgrade | version
+#
+# 目錄佈局（install.sh 建立）：
+#   <安裝目錄>/app/          程式（本腳本在 app/bin/ 下），升級時整體替換
+#   <安裝目錄>/runtime/node  安裝腳本下載的獨立 Node.js（系統已有 Node.js 20+ 時沒有）
+#   <安裝目錄>/config.env    設定（PORT、ADMIN_PASSWORD、KNOWLEDGE_GIT_URL…），升級時保留
+#   <安裝目錄>/data/         資料（本地設定、金鑰、知識倉庫工作副本），升級時保留
+#   <安裝目錄>/logs/ run/    日誌與 PID
+# 直接解壓發佈包、不經安裝腳本時，以解壓目錄本身為安裝目錄。
+set -euo pipefail
+
+APP="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ "$(basename "$APP")" = app ]; then BASE="$(dirname "$APP")"; else BASE="$APP"; fi
+CONFIG="$BASE/config.env"
+LOG_DIR="$BASE/logs"
+LOG="$LOG_DIR/knowledge.log"
+PIDFILE="$BASE/run/knowledge.pid"
+
+if [ -x "$BASE/runtime/node/bin/node" ]; then PATH="$BASE/runtime/node/bin:$PATH"; export PATH; fi
+
+say() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
+info() { printf '    %s\n' "$*"; }
+die() { printf '\033[1;31m錯誤：\033[0m%s\n' "$*" >&2; exit 1; }
+
+# 讀取 config.env：一行一個 鍵=值，值原樣使用（可用引號包住），空值跳過；已在環境變數中設定的同名變數優先。
+load_config() {
+  [ -f "$CONFIG" ] || return 0
+  local line key val
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in ''|'#'*) continue ;; *=*) ;; *) continue ;; esac
+    key="${line%%=*}"; val="${line#*=}"
+    key="${key#export }"
+    key="$(printf '%s' "$key" | tr -d '[:space:]')"
+    case "$key" in ''|[0-9]*|*[!A-Za-z0-9_]*) continue ;; esac
+    val="${val#"${val%%[![:space:]]*}"}"; val="${val%"${val##*[![:space:]]}"}"
+    case "$val" in \"*\") val="${val#\"}"; val="${val%\"}" ;; \'*\') val="${val#\'}"; val="${val%\'}" ;; esac
+    [ -n "$val" ] || continue
+    [ -n "$(printenv "$key" 2>/dev/null || true)" ] || export "$key=$val"
+  done < "$CONFIG"
+  export DATA_DIR="${DATA_DIR:-$BASE/data}"
+  case "$DATA_DIR" in /*) ;; *) DATA_DIR="$BASE/${DATA_DIR#./}" ;; esac
+  export NODE_ENV="${NODE_ENV:-production}"
+}
+
+port() { printf '%s' "${PORT:-8080}"; }
+check_host() { case "${HOST:-}" in ''|0.0.0.0|::|'[::]') printf '127.0.0.1' ;; *) printf '%s' "$HOST" ;; esac; }
+
+pid() { cat "$PIDFILE" 2>/dev/null || true; }
+is_running() {
+  local p
+  p="$(pid)"
+  [ -n "$p" ] && kill -0 "$p" 2>/dev/null || return 1
+  # PID 可能已被其他程序重用：能查到命令行時確認是本服務
+  local cmd
+  cmd="$(ps -p "$p" -o command= 2>/dev/null || true)"
+  [ -z "$cmd" ] || case "$cmd" in *src/server.js*) return 0 ;; *) return 1 ;; esac
+}
+
+need_runtime() {
+  command -v node >/dev/null 2>&1 || die "找不到 Node.js 20+；重新執行安裝腳本會自動下載"
+  node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 20 ? 0 : 1)' || die "Node.js $(node -v) 太舊，需要 20+；重新執行安裝腳本會自動下載獨立的 Node.js"
+  command -v git >/dev/null 2>&1 || die "找不到 git，請先安裝（Debian/Ubuntu：sudo apt-get install -y git；macOS：xcode-select --install）"
+}
+
+show_access() {
+  local p
+  p="$(port)"
+  info "管理後台：http://localhost:$p"
+  info "智能體教程：http://localhost:$p/api/v1/prompt"
+  if [ -n "${ADMIN_PASSWORD:-}" ]; then
+    info "管理員密碼：config.env 中的 ADMIN_PASSWORD"
+  elif [ -f "$DATA_DIR/initial-admin-password.txt" ]; then
+    info "初始管理員密碼：$(cat "$DATA_DIR/initial-admin-password.txt")（登入後可在「設定」修改，修改後以新密碼為準）"
+  fi
+  info "設定檔：$CONFIG（修改後 knowledge restart）"
+  info "日誌：$LOG"
+}
+
+start_service() {
+  load_config
+  if is_running; then
+    say "服務已在運行（PID $(pid)）"
+    show_access
+    return 0
+  fi
+  need_runtime
+  mkdir -p "$LOG_DIR" "$(dirname "$PIDFILE")" "$DATA_DIR"
+  cd "$BASE"
+  local offset=0
+  if [ -f "$LOG" ]; then offset="$(wc -c < "$LOG")"; offset="${offset//[[:space:]]/}"; fi
+  nohup node "$APP/src/server.js" >>"$LOG" 2>&1 </dev/null &
+  local p=$!
+  printf '%s\n' "$p" > "$PIDFILE"
+  # 等待服務就緒（公開端點 /api/v1/prompt 返回 200），最多 60 秒；程序提前退出時顯示日誌。
+  if ! node -e '
+    const [url, pid] = process.argv.slice(1);
+    const end = Date.now() + 60000;
+    const alive = () => { try { process.kill(Number(pid), 0); return true; } catch { return false; } };
+    (async () => {
+      while (Date.now() < end) {
+        if (!alive()) process.exit(2);
+        try { const r = await fetch(url, { signal: AbortSignal.timeout(2000) }); if (r.ok) process.exit(0); } catch {}
+        await new Promise(r => setTimeout(r, 300));
+      }
+      process.exit(1);
+    })();
+  ' "http://$(check_host):$(port)/api/v1/prompt" "$p"; then
+    printf '\033[1;31m錯誤：\033[0m服務沒有正常啟動，日誌如下（%s）：\n' "$LOG" >&2
+    tail -c +"$((offset + 1))" "$LOG" | tail -n 30 >&2
+    if kill -0 "$p" 2>/dev/null; then kill "$p" 2>/dev/null || true; fi
+    rm -f "$PIDFILE"
+    exit 1
+  fi
+  say "knowledge_setup $(version) 已啟動（PID $p）"
+  show_access
+}
+
+stop_service() {
+  if ! is_running; then
+    rm -f "$PIDFILE"
+    say "服務未在運行"
+    return 0
+  fi
+  local p
+  p="$(pid)"
+  kill "$p" 2>/dev/null || true
+  for _ in $(seq 1 60); do
+    kill -0 "$p" 2>/dev/null || break
+    sleep 0.25
+  done
+  if kill -0 "$p" 2>/dev/null; then kill -9 "$p" 2>/dev/null || true; fi
+  rm -f "$PIDFILE"
+  say "服務已停止"
+}
+
+status() {
+  load_config
+  if is_running; then
+    say "運行中（PID $(pid)）· $(version) · Node.js $(node -v 2>/dev/null || echo '?')（$(command -v node || echo '?')）"
+    show_access
+    return 0
+  fi
+  say "未運行 · $(version)"
+  return 3
+}
+
+version() { cat "$APP/VERSION" 2>/dev/null || node -p "'v' + require('$APP/package.json').version" 2>/dev/null || echo unknown; }
+
+usage() {
+  cat <<EOF
+用法：knowledge <命令>
+
+  start       在後台啟動服務
+  stop        停止服務
+  restart     重新啟動（修改 config.env 後執行）
+  status      運行狀態、訪問地址與管理員密碼
+  logs [-f]   查看日誌（-f 持續跟隨）
+  run         在前台運行（給 systemd、supervisor 等進程管理器用）
+  password    顯示初始管理員密碼
+  seed        載入示例資料
+  ssh-key     顯示 SSH 部署金鑰公鑰（沒有時產生；--rotate 重新產生）
+  upgrade     升級到最新版本（參數同 install.sh，例如 --version v0.2.0）
+  version     顯示版本
+
+安裝目錄：$BASE
+EOF
+}
+
+cmd="${1:-help}"
+[ $# -gt 0 ] && shift
+case "$cmd" in
+  start) start_service ;;
+  stop) stop_service ;;
+  restart) stop_service; start_service ;;
+  status) status ;;
+  logs)
+    [ -f "$LOG" ] || die "還沒有日誌：$LOG"
+    if [ "${1:-}" = -f ]; then exec tail -n 100 -f "$LOG"; else tail -n 200 "$LOG"; fi ;;
+  run) load_config; need_runtime; mkdir -p "$DATA_DIR"; cd "$BASE"; exec node "$APP/src/server.js" ;;
+  password)
+    load_config
+    if [ -n "${ADMIN_PASSWORD:-}" ]; then info "管理員密碼由 config.env 或環境變數 ADMIN_PASSWORD 提供"
+    elif [ -f "$DATA_DIR/initial-admin-password.txt" ]; then cat "$DATA_DIR/initial-admin-password.txt"
+    else die "沒有初始密碼檔（服務尚未啟動過，或已用 ADMIN_PASSWORD 設定）"; fi ;;
+  seed)
+    load_config; need_runtime; cd "$BASE"
+    node "$APP/scripts/seed.js" "$@"
+    if is_running; then info "服務正在運行：執行 knowledge restart 讓它載入示例資料（或在後台「設定 › 知識倉庫」點「載入示例資料」）"; fi ;;
+  ssh-key) load_config; need_runtime; cd "$BASE"; exec node "$APP/scripts/ssh-key.js" "$@" ;;
+  upgrade)
+    [ "$BASE" != "$APP" ] || die "這是直接解壓的發佈包，請用安裝腳本安裝後再升級"
+    cp "$APP/install.sh" "${TMPDIR:-/tmp}/knowledge-upgrade.$$.sh"
+    exec bash "${TMPDIR:-/tmp}/knowledge-upgrade.$$.sh" --prefix "$BASE" "$@" ;;
+  version|--version|-v) version ;;
+  help|--help|-h) usage ;;
+  *) usage >&2; exit 1 ;;
+esac
