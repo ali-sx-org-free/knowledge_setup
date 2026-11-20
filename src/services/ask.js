@@ -3,6 +3,7 @@
 // 4 引用 ID 與層級 5 未收錄就說未收錄並記為知識缺口 6 接收反饋（見 feedback API）
 import { LEVEL_INFO, LEVEL_RANK } from '../store/model.js';
 import { RuleError } from '../store/validity.js';
+import { tr, currentLocale } from '../i18n/index.js';
 
 const DYNAMIC_RE = /多少|幾個|几个|幾件|几件|還有|还有|剩餘|剩余|當前|当前|目前|現在|现在|實時|实时|此刻|狀態|状态|在途|餘量|余量|how many|current|status/i;
 const HISTORY_RE = /以前|之前|過去|过去|曾經|曾经|原來|原来|舊|旧|改成|變更|变更|歷史|历史|是不是不|previous|used to/i;
@@ -11,6 +12,9 @@ const STOP_PHRASES = ['是什麼', '是什么', '什麼是', '什么是', '指�
 const STOP_CHARS = new Set([...'的了是在有和與与及或也都就還还會会能要把被從从到對对為为於于個个這这那哪些麼么樣样何請请問问一下幾几啥誰谁裡里時候嗎吗呢吧啊會出現']);
 
 const LEVEL_LABEL = { L0: 'L0 可靠', L1: 'L1 參考，未經驗證', L2: 'L2 探索，僅供拓展思路，不作結論', E1: 'E1 已失效' };
+// 答案用的語言名稱（模型無法從問題判斷語言時使用請求語言）。
+const ANSWER_LANGUAGE = { 'zh-TW': '繁體中文', 'zh-CN': '簡體中文', en: '英文（English）' };
+const named = (name, id) => (id ? tr('{name}（{id}）', { name, id }) : name);
 
 function residualOf(question, terms) {
   let r = String(question || '');
@@ -96,7 +100,7 @@ export class AskService {
       }
       return [...out];
     } catch (err) {
-      this.logger.warn?.(`[ask] LLM 術語解析失敗：${err.message}`);
+      this.logger.warn?.(`[ask] ${tr('LLM 術語解析失敗：{error}', { error: err.message })}`);
       return [];
     }
   }
@@ -146,7 +150,7 @@ export class AskService {
       const text = `${r.from?.name} –${r.type}→ ${r.to?.name}`;
       items.push({ id: r.id, kind: 'relation', type: r.type, level: r.level, text, score: overlapScore(qTokens, `${r.type} ${r.from?.name} ${r.to?.name}`) });
     }
-    for (const b of card.bindings) items.push({ id: b.id, kind: 'binding', type: b.object?.category, level: b.level, text: `客體：${b.object?.name}${b.object?.locator ? `（${b.object.locator}）` : ''}`, score: overlapScore(qTokens, `${b.object?.name} ${b.object?.locator || ''} ${b.object?.kind || ''}`) });
+    for (const b of card.bindings) items.push({ id: b.id, kind: 'binding', type: b.object?.category, level: b.level, text: tr('客體：{name}', { name: named(b.object?.name, b.object?.locator) }), score: overlapScore(qTokens, `${b.object?.name} ${b.object?.locator || ''} ${b.object?.kind || ''}`) });
     const hasResidual = qTokens.chars.size + qTokens.bigrams.size + qTokens.words.size > 0;
     let selected;
     if (!hasResidual || (intents.definition && !intents.history)) {
@@ -169,8 +173,8 @@ export class AskService {
     let covered = false;
     for (const rt of realtime) {
       covered = true;
-      const inputs = Object.entries(rt.inputs).map(([k, v]) => `${k}=${v}`).join('，');
-      lines.push(`實時取值：${rt.label || rt.name}（${inputs}）＝ ${rt.value}${rt.unit || ''}。來源：取值 Action ${rt.actionId}「${rt.name}」，經管道「${rt.pipeline?.name}」於 ${rt.fetchedAt} 讀取；動態值不使用任何存儲值。`);
+      const inputs = Object.entries(rt.inputs).map(([k, v]) => `${k}=${v}`).join(tr('，'));
+      lines.push(tr('實時取值：{label}（{inputs}）＝ {value}{unit}。來源：取值 Action {id}「{name}」，經管道「{pipeline}」於 {at} 讀取；動態值不使用任何存儲值。', { label: rt.label || rt.name, inputs, value: rt.value, unit: rt.unit || '', id: rt.actionId, name: rt.name, pipeline: rt.pipeline?.name, at: rt.fetchedAt }));
       citations.push({ id: rt.actionId, kind: 'action', level: null, content: rt.name });
     }
     for (const card of cards) {
@@ -179,21 +183,21 @@ export class AskService {
       const useDefinitionField = !selected.some(i => i.kind === 'assertion' && i.type === '定義') && s.definition && (intents.definition || !hasResidual) && !realtime.length;
       if (!selected.length && !useDefinitionField) continue;
       covered = true;
-      lines.push(`${lines.length ? '\n' : ''}根據知識庫中的「${s.name}」（${s.id}，${s.type}，綜合層級 ${s.level}）：`);
+      lines.push(`${lines.length ? '\n' : ''}${tr('根據知識庫中的「{name}」（{id}，{type}，綜合層級 {level}）：', { name: s.name, id: s.id, type: tr(s.type), level: s.level })}`);
       if (useDefinitionField) {
-        const note = s.level === 'L0' ? 'L0 可靠' : s.level === 'L1' ? `${s.level} 參考，未經驗證` : `${s.level} 探索，僅供拓展思路，不作結論`;
-        lines.push(`· 主體登記的定義：${s.definition}〔${s.id}·${note}；尚無定義類斷言〕`);
+        const note = s.level === 'L0' ? tr('{level} 可靠', { level: 'L0' }) : s.level === 'L1' ? tr('{level} 參考，未經驗證', { level: s.level }) : tr('{level} 探索，僅供拓展思路，不作結論', { level: s.level });
+        lines.push(tr('· 主體登記的定義：{definition}〔{id}·{note}；尚無定義類斷言〕', { definition: s.definition, id: s.id, note }));
         citations.push({ id: s.id, kind: 'subject', level: s.level, content: s.definition, subjectId: s.id });
       }
       for (const it of selected) {
         citations.push({ id: it.id, kind: it.kind, level: it.level, content: it.text, subjectId: s.id });
         if (it.level === 'E1') {
           const rep = it.replacedBy ? card.assertions.find(a => a.id === it.replacedBy) : null;
-          lines.push(`· 已失效（不得作為依據）：${it.text}〔${it.id}·E1〕${it.invalidReason ? `；失效原因：${it.invalidReason}` : ''}${rep ? `；現行替代者：${rep.content}〔${rep.id}·${rep.level}〕` : ''}`);
+          lines.push(tr('· 已失效（不得作為依據）：{text}〔{id}·E1〕', { text: it.text, id: it.id }) + (it.invalidReason ? tr('；失效原因：{reason}', { reason: it.invalidReason }) : '') + (rep ? tr('；現行替代者：{content}〔{id}·{level}〕', { content: rep.content, id: rep.id, level: rep.level }) : ''));
           if (rep && !citations.some(c => c.id === rep.id)) citations.push({ id: rep.id, kind: 'assertion', level: rep.level, content: rep.content, subjectId: s.id });
-        } else if (it.level === 'L0') lines.push(`· ${it.text}〔${it.id}·L0 可靠〕`);
-        else if (it.level === 'L1') lines.push(`· ${it.text}〔${it.id}·L1 參考，未經驗證〕`);
-        else lines.push(`· （探索性知識，僅供拓展思路，不作結論）${it.text}〔${it.id}·L2〕`);
+        } else if (it.level === 'L0') lines.push(tr('· {text}〔{id}·L0 可靠〕', { text: it.text, id: it.id }));
+        else if (it.level === 'L1') lines.push(tr('· {text}〔{id}·L1 參考，未經驗證〕', { text: it.text, id: it.id }));
+        else lines.push(tr('· （探索性知識，僅供拓展思路，不作結論）{text}〔{id}·L2〕', { text: it.text, id: it.id }));
       }
     }
     return { covered, answer: lines.join('\n'), citations };
@@ -214,19 +218,19 @@ export class AskService {
       '2. L0 可直接作為依據；L1 可以使用但必須明確寫「未經驗證」；L2 只能作為思路參考，必須寫明「不作結論」；E1 已失效，不得作為依據，若問題涉及，說明已失效並給出替代者。',
       '3. 庫存數量、訂單狀態等動態值只能使用 realtime 中的實時取值結果，並說明是實時取值；沒有 realtime 時不得給出任何數值。',
       '4. knowledge 中沒有能回答問題的內容時：covered=false，answer 寫「知識庫未收錄：…」並簡述缺什麼；絕不用行業通用知識、公開電商做法或常識補全。',
-      '5. 使用與問題相同的語言（預設繁體中文），簡潔、直接。',
+      `5. 使用與問題相同的語言作答；無法判斷時用${ANSWER_LANGUAGE[currentLocale()] || '繁體中文'}。第 2 條要求寫明的「未經驗證」「不作結論」「已失效」「知識庫未收錄」用作答語言中的等價說法。簡潔、直接。`,
       '輸出 JSON：{"covered": boolean, "answer": string, "citations": [{"id": string, "level": string}], "missingInfo": string|null}'
     ].join('\n');
     const user = JSON.stringify({ question, aliasResolution: resolution, knowledge: slim, realtime }, null, 0);
     const r = await this.llm.chatJson({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], maxTokens: 1200 });
-    if (!r.json || typeof r.json.answer !== 'string') throw new Error('模型未返回有效 JSON');
+    if (!r.json || typeof r.json.answer !== 'string') throw new Error(tr('模型未返回有效 JSON'));
     return { ...r.json, model: r.model, usage: r.usage };
   }
 
   async ask({ question, subjectIds = [], inputs = {}, compose = 'auto', model, includeKnowledge = true }, principal) {
     question = String(question || '').trim();
-    if (!question) throw new RuleError('question 必填', 400, 'invalid_input');
-    if (question.length > 2000) throw new RuleError('問題過長（上限 2000 字）', 400, 'invalid_input');
+    if (!question) throw new RuleError(tr('{field} 必填', { field: 'question' }), 400, 'invalid_input');
+    if (question.length > 2000) throw new RuleError(tr('問題過長（上限 {n} 字）', { n: 2000 }), 400, 'invalid_input');
     const store = this.store;
     const intents = { dynamic: DYNAMIC_RE.test(question), history: HISTORY_RE.test(question), definition: DEFINITION_RE.test(question) };
 
@@ -250,19 +254,19 @@ export class AskService {
     const base = { question, intents, resolution: { matches: resolution.matches, aliasHits: resolution.aliasHits, fuzzy: fuzzy?.fuzzy || null, ambiguous } };
 
     if (ambiguous.length) {
-      const parts = ambiguous.map(a => `「${a.term}」可能指：${a.candidates.map(c => `${c.name}（${c.id}）`).join('、')}`);
+      const parts = ambiguous.map(a => tr('「{term}」可能指：{candidates}', { term: a.term, candidates: a.candidates.map(c => named(c.name, c.id)).join(tr('、')) }));
       return {
         ...base, status: 'ambiguous',
-        answer: `${parts.join('；')}。這是一詞多義的別名，請先確認您指的是哪一個，再據此回答。`,
+        answer: tr('{parts}。這是一詞多義的別名，請先確認您指的是哪一個，再據此回答。', { parts: parts.join(tr('；')) }),
         composer: { type: 'rule' }, citations: [], realtime: [],
         knowledge: includeKnowledge ? ambiguous.flatMap(a => a.candidates.map(c => store.card(c.id))) : undefined,
-        next: { hint: '帶上 subjectIds 重新提問以消歧', candidates: ambiguous.flatMap(a => a.candidates) }
+        next: { hint: tr('帶上 subjectIds 重新提問以消歧'), candidates: ambiguous.flatMap(a => a.candidates) }
       };
     }
 
     if (!canonical.length) {
       const gap = store.recordGap({ question, subjectIds: [], principal, reason: '術語未命中任何主體' });
-      return { ...base, status: 'uncovered', answer: '知識庫未收錄與此問題相關的主體。已記為知識缺口，不使用行業通用知識補全。', composer: { type: 'rule' }, citations: [], realtime: [], knowledge: includeKnowledge ? [] : undefined, gap: gap ? { id: gap.id, count: gap.count } : null };
+      return { ...base, status: 'uncovered', answer: tr('知識庫未收錄與此問題相關的主體。已記為知識缺口，不使用行業通用知識補全。'), composer: { type: 'rule' }, citations: [], realtime: [], knowledge: includeKnowledge ? [] : undefined, gap: gap ? { id: gap.id, count: gap.count } : null };
     }
 
     store.recordUsage(canonical);
@@ -286,7 +290,7 @@ export class AskService {
       if (!realtime.length && needInputs.length) {
         return {
           ...base, status: 'need_inputs',
-          answer: `這是動態值，需要實時取值，不能使用存儲值。請補充參數：${needInputs.flatMap(n => n.missing.map(m => m.label)).join('、')}。`,
+          answer: tr('這是動態值，需要實時取值，不能使用存儲值。請補充參數：{list}。', { list: needInputs.flatMap(n => n.missing.map(m => m.label)).join(tr('、')) }),
           composer: { type: 'rule' }, citations: [], realtime: [], needInputs, knowledge: includeKnowledge ? cards : undefined
         };
       }
@@ -314,7 +318,7 @@ export class AskService {
         result = { covered: r.covered !== false, answer: r.answer, citations: [...new Map(citations.map(c => [c.id, c])).values()], missingInfo: r.missingInfo || null };
         composer = { type: 'openrouter', model: r.model, usage: r.usage };
       } catch (err) {
-        if (compose === 'llm') throw new RuleError(`自然語言組織失敗：${err.message}`, 502, 'llm_error');
+        if (compose === 'llm') throw new RuleError(tr('自然語言組織失敗：{error}', { error: err.message }), 502, 'llm_error');
         composer = { type: 'template', fallbackReason: err.message };
       }
     }
@@ -327,10 +331,10 @@ export class AskService {
     // 5. 未收錄就說未收錄
     if (!result.covered) {
       const gap = store.recordGap({ question, subjectIds: canonical, principal, reason: '命中主體但沒有能回答問題的知識' });
-      const names = cards.map(c => `${c.subject.name}（${c.subject.id}）`).join('、');
+      const names = cards.map(c => named(c.subject.name, c.subject.id)).join(tr('、'));
       return {
         ...base, status: 'uncovered',
-        answer: composer.type === 'openrouter' && result.answer ? result.answer : `知識庫未收錄：已找到相關主體 ${names}，但其中沒有能回答此問題的知識。已記為知識缺口，不使用行業通用知識補全。`,
+        answer: composer.type === 'openrouter' && result.answer ? result.answer : tr('知識庫未收錄：已找到相關主體 {names}，但其中沒有能回答此問題的知識。已記為知識缺口，不使用行業通用知識補全。', { names }),
         composer, citations: [], realtime, knowledge: includeKnowledge ? cards : undefined, gap: gap ? { id: gap.id, count: gap.count } : null, missingInfo: result.missingInfo
       };
     }
@@ -338,9 +342,9 @@ export class AskService {
     return {
       ...base, status: 'answered', answer: result.answer, composer, citations: result.citations, realtime,
       needInputs: needInputs.length ? needInputs : undefined,
-      reliability: lowest.length ? { levels: [...new Set(lowest)], note: lowest.some(l => l !== 'L0') ? '答案包含非 L0 知識，請按層級標註使用' : '答案依據均為 L0' } : null,
+      reliability: lowest.length ? { levels: [...new Set(lowest)], note: lowest.some(l => l !== 'L0') ? tr('答案包含非 L0 知識，請按層級標註使用') : tr('答案依據均為 L0') } : null,
       knowledge: includeKnowledge ? cards : undefined,
-      usageRules: Object.fromEntries(Object.entries(LEVEL_INFO).map(([k, v]) => [k, v.usage]))
+      usageRules: Object.fromEntries(Object.entries(LEVEL_INFO).map(([k, v]) => [k, tr(v.usage)]))
     };
   }
 }

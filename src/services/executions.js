@@ -5,35 +5,48 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { RuleError } from '../store/validity.js';
-import { parseLocator, renderSceneInputs, evaluateExpect, evidenceOf, actionHash } from '../store/rpa.js';
+import { parseLocator, renderSceneInputs, evaluateExpect, evidenceOf, actionHash, STALE_REASONS } from '../store/rpa.js';
 import { RpaClient, RpaError } from './rpa.js';
+import { tr, tk, SOURCE_LOCALE } from '../i18n/index.js';
+
+// 執行說明以「原文 + 參數」保存（detailMsg），detail 是繁體原文（與寫回知識倉庫的內容一致）；
+// API 按請求語言另外返回 detailText 與 reasonText。原文用 tk() 標記，字典完整性檢查才找得到。
+const msg = (key, params = null) => ({ key, params });
+/** 說明 → 文字：字串原樣（RPA 返回的錯誤等外部文字），陣列用「；」連接，{ key, params } 按語言翻譯（參數也可以是說明）。 */
+export function renderMessage(m, locale) {
+  if (m === null || m === undefined) return null;
+  if (Array.isArray(m)) return m.filter(x => x !== null && x !== undefined && x !== '').map(x => renderMessage(x, locale)).join(tr('；', null, locale));
+  if (typeof m !== 'object') return String(m);
+  const params = m.params ? Object.fromEntries(Object.entries(m.params).map(([k, v]) => [k, v !== null && typeof v === 'object' ? renderMessage(v, locale) : v])) : null;
+  return tr(m.key, params, locale);
+}
 
 export const EXECUTION_STATES = {
-  accepted: { name: '已受理', terminal: false },
-  submitted: { name: '排隊中', terminal: false },
-  running: { name: '執行中', terminal: false },
-  needs_login: { name: '需要登入', terminal: true },
-  rejected: { name: '已拒絕', terminal: true },
-  expired: { name: '已逾時', terminal: true },
-  done: { name: '已完成', terminal: true }
+  accepted: { name: tk('已受理'), terminal: false },
+  submitted: { name: tk('排隊中'), terminal: false },
+  running: { name: tk('執行中'), terminal: false },
+  needs_login: { name: tk('需要登入'), terminal: true },
+  rejected: { name: tk('已拒絕'), terminal: true },
+  expired: { name: tk('已逾時'), terminal: true },
+  done: { name: tk('已完成'), terminal: true }
 };
 
 export const EXECUTION_REASONS = {
-  revision_changed: '場景版本與審閱版本不同，需負責人重新審閱',
-  scene_archived: '場景已歸檔',
-  not_published: '場景沒有發布的版本',
-  inputs_invalid: '入參不符合場景宣告',
-  action_changed: 'Action 在執行前被修改或停用',
-  pipeline_missing: '管道不存在或已不是 RPA 管道',
-  queue_timeout: '一直排隊，沒有可用的 Worker',
-  deadline: '超過整體期限，結果未知',
-  run_not_found: 'RPA 找不到這個運行',
-  needs_login: '登入角色需要人工登入',
-  expect_failed: '守衛不符：出參與客體定位對不上',
-  rpa_failed: 'RPA 運行失敗',
-  rpa_timed_out: 'RPA 運行逾時',
-  rpa_cancelled: 'RPA 運行已取消',
-  internal_error: '知識庫內部錯誤'
+  revision_changed: tk('場景版本與審閱版本不同，需負責人重新審閱'),
+  scene_archived: tk('場景已歸檔'),
+  not_published: tk('場景沒有發布的版本'),
+  inputs_invalid: tk('入參不符合場景宣告'),
+  action_changed: tk('Action 在執行前被修改或停用'),
+  pipeline_missing: tk('管道不存在或已不是 RPA 管道'),
+  queue_timeout: tk('一直排隊，沒有可用的 Worker'),
+  deadline: tk('超過整體期限，結果未知'),
+  run_not_found: tk('RPA 找不到這個運行'),
+  needs_login: tk('登入角色需要人工登入'),
+  expect_failed: tk('守衛不符：出參與客體定位對不上'),
+  rpa_failed: tk('RPA 運行失敗'),
+  rpa_timed_out: tk('RPA 運行逾時'),
+  rpa_cancelled: tk('RPA 運行已取消'),
+  internal_error: tk('知識庫內部錯誤')
 };
 
 const terminal = state => EXECUTION_STATES[state]?.terminal === true;
@@ -117,7 +130,7 @@ export class ExecutionService {
 
   get(id) {
     const exec = this.records.get(id);
-    if (!exec) throw new RuleError(`找不到執行 ${id}`, 404, 'not_found');
+    if (!exec) throw new RuleError(tr('找不到執行 {id}', { id }), 404, 'not_found');
     return exec;
   }
 
@@ -159,7 +172,7 @@ export class ExecutionService {
    */
   start({ ref, action, object, principal, dryRun = false }) {
     const pipeline = this.store.pipelines.get(action.pipelineId);
-    if (pipeline?.type !== 'rpa') throw new RuleError(`Action ${action.id} 的管道不是 RPA 管道`, 422, 'pipeline_missing');
+    if (pipeline?.type !== 'rpa') throw new RuleError(tr('Action {id} 的管道不是 RPA 管道', { id: action.id }), 422, 'pipeline_missing');
     const itemId = ref?.item?.id || null;
     if (!dryRun) {
       const active = this.activeFor(itemId, action.id);
@@ -167,7 +180,7 @@ export class ExecutionService {
     }
     const groups = parseLocator(action, object?.locator);
     const { inputs, problems } = renderSceneInputs(action, { object, groups }, this.cachedContract(pipeline, action));
-    if (problems.length) throw Object.assign(new RuleError(`入參不符合場景宣告：${problems.map(p => `${p.name} ${p.message}`).join('；')}`, 400, 'inputs_invalid'), { problems });
+    if (problems.length) throw Object.assign(new RuleError(tr('入參不符合場景宣告：{list}', { list: problems.map(p => `${p.name} ${p.message}`).join(tr('；')) }), 400, 'inputs_invalid'), { problems });
     const now = this.now();
     const id = newId(now);
     const rp = pipeline.rpa || {};
@@ -213,7 +226,7 @@ export class ExecutionService {
   /** expired 的執行：再讀一次原運行（已結束就照常判定和寫回，仍受寫回前的過期檢查約束）。 */
   refresh(id) {
     const exec = this.get(id);
-    if (exec.state !== 'expired' || !exec.rpa?.runId) throw new RuleError('只有已逾時且有運行 ID 的執行可以重新讀取原運行', 409, 'not_refreshable');
+    if (exec.state !== 'expired' || !exec.rpa?.runId) throw new RuleError(tr('只有已逾時且有運行 ID 的執行可以重新讀取原運行'), 409, 'not_refreshable');
     const pipeline = this.store.pipelines.get(exec.pipelineId);
     const now = this.now();
     exec.state = exec.rpa.status === 'running' ? 'running' : 'submitted';
@@ -289,7 +302,8 @@ export class ExecutionService {
     exec.state = state;
     exec.verdict = verdict;
     exec.reason = reason;
-    exec.detail = detail || (reason ? EXECUTION_REASONS[reason] || reason : null);
+    exec.detailMsg = detail || (reason ? (EXECUTION_REASONS[reason] ? msg(EXECUTION_REASONS[reason]) : reason) : null);
+    exec.detail = renderMessage(exec.detailMsg, SOURCE_LOCALE);
     Object.assign(exec, rest);
     exec.finishedAt = nowIso(this.now());
     exec.nextAt = null;
@@ -319,10 +333,10 @@ export class ExecutionService {
     if (!(err instanceof RpaError)) throw err;
     exec.lastError = err.message;
     if (err.retryable) {
-      if (this.pastDeadline(exec)) return this.finish(exec, 'expired', { reason: 'deadline', detail: `RPA 一直不可用：${err.message}` });
+      if (this.pastDeadline(exec)) return this.finish(exec, 'expired', { reason: 'deadline', detail: msg(tk('RPA 一直不可用：{message}'), { message: err.message }) });
       return this.later(exec, true);
     }
-    if (err.code === 'revision_mismatch') return this.finish(exec, 'rejected', { reason: 'revision_changed', detail: `RPA 這次會用 v${err.details.revision ?? '?'}，Action 審閱的是 v${exec.rpa.expectedRevision}；請負責人審閱新版本` });
+    if (err.code === 'revision_mismatch') return this.finish(exec, 'rejected', { reason: 'revision_changed', detail: msg(tk('RPA 這次會用 v{actual}，Action 審閱的是 v{expected}；請負責人審閱新版本'), { actual: err.details.revision ?? '?', expected: exec.rpa.expectedRevision }) });
     if (err.code === 'login_required' || err.code === 'needs_login') return this.finish(exec, 'needs_login', { reason: 'needs_login', detail: err.message });
     const problems = Array.isArray(err.details?.problems) ? err.details.problems : null;
     this.finish(exec, 'rejected', { reason: err.code, detail: err.message, problems });
@@ -339,12 +353,12 @@ export class ExecutionService {
       const scene = await client.scene(action.rpa.sceneId);
       if (scene.archived) return this.finish(exec, 'rejected', { reason: 'scene_archived' });
       if (!scene.publishedRevision) return this.finish(exec, 'rejected', { reason: 'not_published' });
-      if (Number(scene.publishedRevision) !== action.rpa.revision) return this.finish(exec, 'rejected', { reason: 'revision_changed', detail: `場景已發布 v${scene.publishedRevision}，Action 審閱的是 v${action.rpa.revision}；請負責人審閱新版本` });
+      if (Number(scene.publishedRevision) !== action.rpa.revision) return this.finish(exec, 'rejected', { reason: 'revision_changed', detail: msg(tk('場景已發布 v{actual}，Action 審閱的是 v{expected}；請負責人審閱新版本'), { actual: scene.publishedRevision, expected: action.rpa.revision }) });
       const { contentHash, contract } = await this.contractFor(pipeline, action);
-      if (contentHash && contentHash !== action.rpa.contentHash) return this.finish(exec, 'rejected', { reason: 'revision_changed', detail: `v${action.rpa.revision} 的內容雜湊與審閱時不同（${contentHash.slice(0, 12)} ≠ ${String(action.rpa.contentHash).slice(0, 12)}）` });
+      if (contentHash && contentHash !== action.rpa.contentHash) return this.finish(exec, 'rejected', { reason: 'revision_changed', detail: msg(tk('v{n} 的內容雜湊與審閱時不同（{actual} ≠ {expected}）'), { n: action.rpa.revision, actual: contentHash.slice(0, 12), expected: String(action.rpa.contentHash).slice(0, 12) }) });
       // 按場景入參宣告轉型與檢查
       const rendered = renderSceneInputs(action, { object: { id: exec.target.objectId, name: exec.target.objectName, locator: exec.target.locator }, groups: exec.groups }, contract);
-      if (rendered.problems.length) return this.finish(exec, 'rejected', { reason: 'inputs_invalid', detail: rendered.problems.map(p => `${p.name} ${p.message}`).join('；'), problems: rendered.problems });
+      if (rendered.problems.length) return this.finish(exec, 'rejected', { reason: 'inputs_invalid', detail: rendered.problems.map(p => `${p.name} ${p.message}`), problems: rendered.problems });
       exec.inputs = rendered.inputs;
       // 2. 角色預檢：需要登入時不消耗運行（unknown 照常派發；讀不到角色時交給 RPA 判斷）
       if (contract.loginRole) {
@@ -352,7 +366,7 @@ export class ExecutionService {
         const list = Array.isArray(roles) ? roles : roles?.roles;
         const role = Array.isArray(list) ? list.find(r => r.id === contract.loginRole) : null;
         exec.rpa.role = contract.loginRole;
-        if (role && (role.status === 'needs_login' || role.status === 'none')) return this.finish(exec, 'needs_login', { reason: 'needs_login', detail: `登入角色 ${contract.loginRole} 需要人工登入；請在 RPA 登入後重試` });
+        if (role && (role.status === 'needs_login' || role.status === 'none')) return this.finish(exec, 'needs_login', { reason: 'needs_login', detail: msg(tk('登入角色 {role} 需要人工登入；請在 RPA 登入後重試'), { role: contract.loginRole }) });
       }
       // 3. 提交（同一個冪等鍵重試只會有一個運行）
       const body = { inputs: exec.inputs, idempotencyKey: exec.rpa.idempotencyKey };
@@ -377,7 +391,7 @@ export class ExecutionService {
       exec.submittedAt = nowIso(this.now());
       if (Number(run.revision) !== action.rpa.revision) {
         await client.cancelRun(run.id).catch(() => {});
-        return this.finish(exec, 'rejected', { reason: 'revision_changed', detail: `RPA 用了 v${run.revision}，Action 審閱的是 v${action.rpa.revision}；運行已取消` });
+        return this.finish(exec, 'rejected', { reason: 'revision_changed', detail: msg(tk('RPA 用了 v{actual}，Action 審閱的是 v{expected}；運行已取消'), { actual: run.revision, expected: action.rpa.revision }) });
       }
       const deadlineSec = rp.deadlineSec || (contract.deadlineMs ? Math.ceil(contract.deadlineMs / 1000) + (rp.queueTimeoutSec || 300) + 60 : 900);
       exec.deadlineAt = nowIso(this.now() + deadlineSec * 1000);
@@ -425,11 +439,11 @@ export class ExecutionService {
     const now = this.now();
     if (run.status === 'queued' && exec.submittedAt && now - Date.parse(exec.submittedAt) > (rp.queueTimeoutSec || 300) * 1000) {
       await client.cancelRun(run.id).catch(() => {});
-      return this.finish(exec, 'expired', { reason: 'queue_timeout', detail: `排隊超過 ${rp.queueTimeoutSec || 300} 秒，沒有可用的 Worker；運行已取消` });
+      return this.finish(exec, 'expired', { reason: 'queue_timeout', detail: msg(tk('排隊超過 {n} 秒，沒有可用的 Worker；運行已取消'), { n: rp.queueTimeoutSec || 300 }) });
     }
     if (this.pastDeadline(exec)) {
       if (run.status === 'queued') await client.cancelRun(run.id).catch(() => {});
-      return this.finish(exec, 'expired', { reason: 'deadline', detail: `超過整體期限（${exec.deadlineAt}），結果未知；運行 ${run.id}${run.status === 'queued' ? ' 已取消' : ' 仍在執行，可稍後重新讀取'}` });
+      return this.finish(exec, 'expired', { reason: 'deadline', detail: run.status === 'queued' ? msg(tk('超過整體期限（{at}），結果未知；運行 {run} 已取消'), { at: exec.deadlineAt, run: run.id }) : msg(tk('超過整體期限（{at}），結果未知；運行 {run} 仍在執行，可稍後重新讀取'), { at: exec.deadlineAt, run: run.id }) });
     }
     this.later(exec);
   }
@@ -439,29 +453,30 @@ export class ExecutionService {
     const status = run.status;
     if (status === 'needs_login') {
       exec.rpa.role = run.result?.role || exec.rpa.role;
-      return this.finish(exec, 'needs_login', { reason: 'needs_login', detail: `登入角色 ${exec.rpa.role || '?'} 需要人工登入；請在 RPA 登入後重試` });
+      return this.finish(exec, 'needs_login', { reason: 'needs_login', detail: msg(tk('登入角色 {role} 需要人工登入；請在 RPA 登入後重試'), { role: exec.rpa.role || '?' }) });
     }
     if (status !== 'passed') {
-      const detail = [`RPA 運行 ${status}`, run.stage ? `階段 ${run.stage}` : null, run.error].filter(Boolean).join('：');
+      const detail = [msg(tk('RPA 運行 {status}'), { status }), run.stage ? msg(tk('階段 {stage}'), { stage: run.stage }) : null, run.error || null].filter(Boolean);
       return this.finish(exec, 'done', { verdict: 'inconclusive', reason: `rpa_${status}`, detail });
     }
     if (Number(run.revision) !== exec.rpa.expectedRevision || (run.scenarioHash && run.scenarioHash !== exec.rpa.contentHash)) {
-      return this.finish(exec, 'done', { verdict: 'inconclusive', reason: 'revision_changed', detail: `運行用的版本（v${run.revision}，${String(run.scenarioHash || '').slice(0, 12)}）不是審閱版本（v${exec.rpa.expectedRevision}，${String(exec.rpa.contentHash).slice(0, 12)}）` });
+      return this.finish(exec, 'done', { verdict: 'inconclusive', reason: 'revision_changed', detail: msg(tk('運行用的版本（v{actual}，{actualHash}）不是審閱版本（v{expected}，{expectedHash}）'), { actual: run.revision, actualHash: String(run.scenarioHash || '').slice(0, 12), expected: exec.rpa.expectedRevision, expectedHash: String(exec.rpa.contentHash).slice(0, 12) }) });
     }
     const output = run.output && typeof run.output === 'object' ? run.output : {};
     const object = { id: exec.target.objectId, name: exec.target.objectName, locator: exec.target.locator };
     const checked = evaluateExpect(exec.spec, output, { object, groups: exec.groups });
     if (!checked.ok) {
-      const detail = checked.failures.map(f => `${f.output}：期望 ${JSON.stringify(f.expected)}，實際 ${JSON.stringify(f.actual)}`).join('；');
+      const detail = checked.failures.map(f => msg(tk('{output}：期望 {expected}，實際 {actual}'), { output: f.output, expected: JSON.stringify(f.expected), actual: JSON.stringify(f.actual) }));
       return this.finish(exec, 'done', { verdict: 'inconclusive', reason: 'expect_failed', detail, failures: checked.failures });
     }
-    const summary = exec.spec.check.expect.map(e => (e.nonEmpty ? `${e.output} 非空` : `${e.output} = ${JSON.stringify(output[e.output])}`)).join('；');
-    // 先寫回再轉為終態：讀到 done 時寫回效果已經確定
+    const summary = exec.spec.check.expect.map(e => (e.nonEmpty ? msg(tk('{output} 非空'), { output: e.output }) : `${e.output} = ${JSON.stringify(output[e.output])}`));
+    const passed = msg(tk('守衛全部通過：{summary}'), { summary });
+    // 先寫回再轉為終態：讀到 done 時寫回效果已經確定。寫進知識倉庫的 lastCheck.detail 用繁體原文。
     exec.verdict = 'pass';
-    exec.detail = `守衛全部通過：${summary}`;
+    exec.detail = renderMessage(passed, SOURCE_LOCALE);
     exec.evidence = evidenceOf(exec.spec, output);
     const wb = exec.dryRun ? { effect: 'dry_run' } : await this.writeBack(exec);
-    this.finish(exec, 'done', { verdict: 'pass', detail: wb.note ? `${exec.detail}；${wb.note}` : exec.detail, effect: wb.effect, level: wb.level ?? null, commit: wb.commit || null, staleReason: wb.staleReason || null });
+    this.finish(exec, 'done', { verdict: 'pass', detail: wb.note ? [passed, wb.note] : passed, effect: wb.effect, level: wb.level ?? null, commit: wb.commit || null, staleReason: wb.staleReason || null });
   }
 
   /** 寫回（§8.5）：一次 store.tx；目標在執行期間變了就記 stale，不寫。 */
@@ -470,10 +485,10 @@ export class ExecutionService {
     try {
       const out = await this.store.tx(runner, `[校驗] ${exec.actionId} → ${exec.target.itemId}：pass（RPA 運行 ${exec.rpa.runId}，觸發者 ${exec.requestedBy.id}）`, t => this.store.applyExecutionResult(t, exec, runner));
       const r = out.result;
-      return { effect: r.effect, level: r.level, commit: out.commit, staleReason: r.effect === 'stale' ? r.reason : null, note: r.effect === 'stale' ? `未寫回：${r.detail}` : null };
+      return { effect: r.effect, level: r.level, commit: out.commit, staleReason: r.effect === 'stale' ? r.reason : null, note: r.effect === 'stale' ? msg(tk('未寫回：{detail}'), { detail: STALE_REASONS[r.reason] ? msg(STALE_REASONS[r.reason], { id: exec.target.itemId }) : r.reason }) : null };
     } catch (err) {
       exec.lastError = err.message;
-      return { effect: 'none', note: `寫回失敗：${err.message}` };
+      return { effect: 'none', note: msg(tk('寫回失敗：{message}'), { message: err.message }) };
     }
   }
 }
@@ -481,6 +496,8 @@ export class ExecutionService {
 /** 給 API 返回的精簡視圖。 */
 export function executionView(exec) {
   if (!exec) return null;
-  const { spec, nextAt, pollMs, ...rest } = exec;
-  return { ...rest, stateName: EXECUTION_STATES[exec.state]?.name || exec.state, terminal: terminal(exec.state), statusUrl: `/api/v1/action-executions/${exec.id}` };
+  const { spec, nextAt, pollMs, detailMsg, ...rest } = exec;
+  const reasonText = exec.reason && EXECUTION_REASONS[exec.reason] ? tr(EXECUTION_REASONS[exec.reason]) : null;
+  const detailText = detailMsg !== undefined ? renderMessage(detailMsg) : exec.detail ?? null;
+  return { ...rest, stateName: EXECUTION_STATES[exec.state] ? tr(EXECUTION_STATES[exec.state].name) : exec.state, reasonText, detailText, terminal: terminal(exec.state), statusUrl: `/api/v1/action-executions/${exec.id}` };
 }

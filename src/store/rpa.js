@@ -3,6 +3,7 @@
 // 一個 Action = 一個場景的一個審閱過的發布版本 + 參數映射 + 判定守衛。
 import crypto from 'node:crypto';
 import { RuleError } from './validity.js';
+import { tr, tk } from '../i18n/index.js';
 
 const clean = v => (typeof v === 'string' ? v.trim() : v);
 const TARGETS = ['local', 'remote', 'any'];
@@ -19,15 +20,15 @@ function intIn(value, fallback, min, max) {
 /** 管道地址：可以填伺服器根地址或 Agent API 地址，統一成 …/agent-api/v1。 */
 export function normalizeRpaBaseUrl(url) {
   const u = String(url || '').trim().replace(/\/+$/, '');
-  if (!/^https?:\/\/[^/]+/i.test(u)) throw new RuleError('RPA 管道需要 baseUrl（http/https），例如 http://rpa.internal:8081/agent-api/v1', 400, 'invalid_input');
+  if (!/^https?:\/\/[^/]+/i.test(u)) throw new RuleError(tr('RPA 管道需要 baseUrl（http/https），例如 {example}', { example: 'http://rpa.internal:8081/agent-api/v1' }), 400, 'invalid_input');
   return /\/agent-api\/v\d+$/.test(u) ? u : `${u}/agent-api/v1`;
 }
 
 /** 管道的 rpa 區塊：輪詢、期限、並發與執行位置。場景範圍、Worker 清單、權限範圍以 RPA 的 API 用戶端為準，不在這裡保存。 */
 export function normalizePipelineRpa(input = {}) {
   const portalUrl = clean(input.portalUrl) || null;
-  if (portalUrl && !/^https?:\/\//i.test(portalUrl)) throw new RuleError('rpa.portalUrl 必須是 http/https 地址', 400, 'invalid_input');
-  if (input.target && !TARGETS.includes(input.target)) throw new RuleError(`rpa.target 必須為 ${TARGETS.join(' / ')}`, 400, 'invalid_input');
+  if (portalUrl && !/^https?:\/\//i.test(portalUrl)) throw new RuleError(tr('rpa.portalUrl 必須是 http/https 地址'), 400, 'invalid_input');
+  if (input.target && !TARGETS.includes(input.target)) throw new RuleError(tr('rpa.target 必須為 {list}', { list: TARGETS.join(' / ') }), 400, 'invalid_input');
   const pollIntervalMs = intIn(input.pollIntervalMs, 3000, 10, 60000);
   return {
     portalUrl: portalUrl ? portalUrl.replace(/\/+$/, '') : null,
@@ -57,13 +58,23 @@ function compileLocator(pattern) {
   try {
     return new RegExp(pattern, 'u');
   } catch (err) {
-    throw new RuleError(`locator.pattern 不是合法的正則：${err.message}`, 400, 'invalid_input');
+    throw new RuleError(tr('locator.pattern 不是合法的正則：{message}', { message: err.message }), 400, 'invalid_input');
   }
 }
 
 function groupNames(pattern) {
   return [...String(pattern).matchAll(/\(\?<([A-Za-z_]\w*)>/g)].map(m => m[1]);
 }
+
+/** 寫回時發現目標在執行期間變了（store.applyExecutionResult 返回的 reason）。 */
+export const STALE_REASONS = {
+  item_missing: tk('條目 {id} 已不存在'),
+  item_changed: tk('綁定的客體已改變'),
+  object_changed: tk('客體定位在執行期間被修改'),
+  object_offline: tk('客體已下線'),
+  action_changed: tk('Action 配置在執行期間被修改'),
+  newer_result: tk('有更晚開始的執行已經寫回')
+};
 
 const isScalar = v => ['string', 'number', 'boolean'].includes(typeof v);
 
@@ -72,55 +83,55 @@ const isScalar = v => ['string', 'number', 'boolean'].includes(typeof v);
  * 參數全部來自客體定位與固定值，調用者不能傳入參；成功要滿足全部守衛（expect）。
  */
 export function normalizeRpaAction(input) {
-  if (input.kind !== '校驗') throw new RuleError('RPA 管道第一期只支持「校驗」Action；取值在第二期支持', 400, 'not_supported');
+  if (input.kind !== '校驗') throw new RuleError(tr('RPA 管道第一期只支持「校驗」Action；取值在第二期支持'), 400, 'not_supported');
   const mode = input.check?.mode || 'exists';
-  if (mode !== 'exists') throw new RuleError('RPA 校驗 Action 第一期只支持 exists（存在性校驗）；斷言內容比對在第二期支持', 400, 'not_supported');
+  if (mode !== 'exists') throw new RuleError(tr('RPA 校驗 Action 第一期只支持 exists（存在性校驗）；斷言內容比對在第二期支持'), 400, 'not_supported');
   const r = input.rpa || {};
   const sceneId = clean(r.sceneId);
-  if (!sceneId) throw new RuleError('rpa.sceneId 必填：RPA 場景 ID', 400, 'invalid_input');
+  if (!sceneId) throw new RuleError(tr('rpa.sceneId 必填：RPA 場景 ID'), 400, 'invalid_input');
   const revision = Number(r.revision);
-  if (!Number.isInteger(revision) || revision < 1) throw new RuleError('rpa.revision 必填：審閱過的發布版本號', 400, 'invalid_input');
+  if (!Number.isInteger(revision) || revision < 1) throw new RuleError(tr('rpa.revision 必填：審閱過的發布版本號'), 400, 'invalid_input');
   const contentHash = clean(r.contentHash);
-  if (!contentHash) throw new RuleError('rpa.contentHash 必填：審閱時該版本的內容雜湊（從場景目錄讀取）', 400, 'invalid_input');
+  if (!contentHash) throw new RuleError(tr('rpa.contentHash 必填：審閱時該版本的內容雜湊（從場景目錄讀取）'), 400, 'invalid_input');
   const inputs = r.inputs && typeof r.inputs === 'object' && !Array.isArray(r.inputs) ? r.inputs : null;
-  if (!inputs) throw new RuleError('rpa.inputs 必填：場景入參 → 來源（{locator.分組}、{object.locator} 或固定值）', 400, 'invalid_input');
-  for (const [k, v] of Object.entries(inputs)) if (!isScalar(v)) throw new RuleError(`rpa.inputs.${k} 必須是字串、數字或布林值`, 400, 'invalid_input');
+  if (!inputs) throw new RuleError(tr('rpa.inputs 必填：場景入參 → 來源（{locator.分組}、{object.locator} 或固定值）'), 400, 'invalid_input');
+  for (const [k, v] of Object.entries(inputs)) if (!isScalar(v)) throw new RuleError(tr('rpa.inputs.{name} 必須是字串、數字或布林值', { name: k }), 400, 'invalid_input');
 
   const pattern = clean(input.locator?.pattern) || null;
   const example = clean(input.locator?.example) || null;
   const groups = pattern ? groupNames(pattern) : [];
   if (pattern) {
     const re = compileLocator(pattern);
-    if (!groups.length) throw new RuleError('locator.pattern 至少要有一個命名分組，例如 (?<table>[a-z_]+)', 400, 'invalid_input');
-    if (example && !re.test(example)) throw new RuleError(`locator.example「${example}」不符合 locator.pattern`, 400, 'invalid_input');
+    if (!groups.length) throw new RuleError(tr('locator.pattern 至少要有一個命名分組，例如 {example}', { example: '(?<table>[a-z_]+)' }), 400, 'invalid_input');
+    if (example && !re.test(example)) throw new RuleError(tr('locator.example「{example}」不符合 locator.pattern', { example }), 400, 'invalid_input');
   }
 
   const expect = Array.isArray(input.check?.expect) ? input.check.expect : [];
-  if (!expect.length) throw new RuleError('check.expect 至少要有一項守衛：出參要回顯定位用的欄位，逐項精確比對，確認場景查的就是這個客體', 400, 'invalid_input');
+  if (!expect.length) throw new RuleError(tr('check.expect 至少要有一項守衛：出參要回顯定位用的欄位，逐項精確比對，確認場景查的就是這個客體'), 400, 'invalid_input');
   const cleanExpect = expect.map((e, i) => {
     const output = clean(e?.output);
-    if (!output) throw new RuleError(`check.expect[${i}].output 必填`, 400, 'invalid_input');
+    if (!output) throw new RuleError(tr('check.expect[{i}].output 必填', { i }), 400, 'invalid_input');
     const hasEquals = e.equals !== undefined && e.equals !== null;
-    if (!hasEquals && e.nonEmpty !== true) throw new RuleError(`check.expect[${i}] 需要 equals 或 nonEmpty: true`, 400, 'invalid_input');
-    if (hasEquals && !isScalar(e.equals)) throw new RuleError(`check.expect[${i}].equals 必須是字串、數字或布林值`, 400, 'invalid_input');
+    if (!hasEquals && e.nonEmpty !== true) throw new RuleError(tr('check.expect[{i}] 需要 equals 或 nonEmpty: true', { i }), 400, 'invalid_input');
+    if (hasEquals && !isScalar(e.equals)) throw new RuleError(tr('check.expect[{i}].equals 必須是字串、數字或布林值', { i }), 400, 'invalid_input');
     return hasEquals ? { output, equals: e.equals } : { output, nonEmpty: true };
   });
 
   const refs = templateRefs([inputs, cleanExpect]);
   for (const ref of refs) {
     const [root, name] = ref.split('.');
-    if (root === 'input') throw new RuleError('校驗 Action 不接受調用者入參（{input.x}）：參數只能來自客體定位與固定值，避免被引導去查別的對象', 400, 'invalid_input');
+    if (root === 'input') throw new RuleError(tr('校驗 Action 不接受調用者入參（{input.x}）：參數只能來自客體定位與固定值，避免被引導去查別的對象'), 400, 'invalid_input');
     if (root === 'locator') {
-      if (!pattern) throw new RuleError(`引用了 {${ref}}，但沒有設定 locator.pattern`, 400, 'invalid_input');
-      if (!groups.includes(name)) throw new RuleError(`引用了 {${ref}}，但 locator.pattern 沒有分組「${name}」（現有：${groups.join('、')}）`, 400, 'invalid_input');
+      if (!pattern) throw new RuleError(tr('引用了 {ref}，但沒有設定 locator.pattern', { ref: `{${ref}}` }), 400, 'invalid_input');
+      if (!groups.includes(name)) throw new RuleError(tr('引用了 {ref}，但 locator.pattern 沒有分組「{name}」（現有：{groups}）', { ref: `{${ref}}`, name, groups: groups.join(tr('、')) }), 400, 'invalid_input');
     } else if (!['object.locator', 'object.id', 'object.name'].includes(ref)) {
-      throw new RuleError(`不支持的模板變量 {${ref}}：可用 {locator.分組}、{object.locator}、{object.id}、{object.name}`, 400, 'invalid_input');
+      throw new RuleError(tr('不支持的模板變量 {ref}：可用 {locator.分組}、{object.locator}、{object.id}、{object.name}', { ref: `{${ref}}` }), 400, 'invalid_input');
     }
   }
 
   const list = v => (Array.isArray(v) ? [...new Set(v.map(x => clean(String(x))).filter(Boolean))] : []);
   const schedule = input.schedule || 'manual';
-  if (schedule !== 'manual') throw new RuleError('RPA Action 第一期只支持手動發起（schedule: manual）；定期複驗在第二期支持', 400, 'not_supported');
+  if (schedule !== 'manual') throw new RuleError(tr('RPA Action 第一期只支持手動發起（schedule: manual）；定期複驗在第二期支持'), 400, 'not_supported');
   return {
     rpa: { sceneId, revision, contentHash, loginRole: clean(r.loginRole) || null, inputs },
     locator: pattern ? { pattern, example } : null,
@@ -143,8 +154,8 @@ export function parseLocator(action, locator) {
   const value = String(locator || '');
   const m = compileLocator(action.locator.pattern).exec(value);
   if (!m) {
-    const hint = action.locator.example ? `，例如 ${action.locator.example}` : '';
-    throw new RuleError(`客體定位「${value || '（空）'}」不符合 ${action.id || 'Action'} 要求的格式 ${action.locator.pattern}${hint}；請先更正客體定位`, 400, 'locator_invalid');
+    const params = { locator: value || tr('（空）'), id: action.id || 'Action', pattern: action.locator.pattern, example: action.locator.example };
+    throw new RuleError(action.locator.example ? tr('客體定位「{locator}」不符合 {id} 要求的格式 {pattern}，例如 {example}；請先更正客體定位', params) : tr('客體定位「{locator}」不符合 {id} 要求的格式 {pattern}；請先更正客體定位', params), 400, 'locator_invalid');
   }
   return { ...(m.groups || {}) };
 }
@@ -185,18 +196,18 @@ export function renderSceneInputs(action, { object, groups }, contract = null) {
     const spec = contract?.inputs?.[name];
     const v = coerce(renderValue(tpl, ctx), spec);
     if (v === undefined || v === '') {
-      problems.push({ name, message: '映射結果為空' });
+      problems.push({ name, message: tr('映射結果為空') });
       continue;
     }
-    if (spec?.enum && !spec.enum.some(e => e === v)) problems.push({ name, message: `不在可選值 ${spec.enum.join(' / ')} 內` });
-    if (spec?.pattern && typeof v === 'string' && !new RegExp(spec.pattern, 'u').test(v)) problems.push({ name, message: `不符合格式 ${spec.pattern}` });
+    if (spec?.enum && !spec.enum.some(e => e === v)) problems.push({ name, message: tr('不在可選值 {values} 內', { values: spec.enum.join(' / ') }) });
+    if (spec?.pattern && typeof v === 'string' && !new RegExp(spec.pattern, 'u').test(v)) problems.push({ name, message: tr('不符合格式 {pattern}', { pattern: spec.pattern }) });
     out[name] = v;
   }
   if (contract?.inputs) {
     for (const [name, spec] of Object.entries(contract.inputs)) {
-      if (!(name in out) && spec?.default === undefined && !problems.some(p => p.name === name) && spec?.required !== false) problems.push({ name, message: '場景入參沒有映射，也沒有預設值' });
+      if (!(name in out) && spec?.default === undefined && !problems.some(p => p.name === name) && spec?.required !== false) problems.push({ name, message: tr('場景入參沒有映射，也沒有預設值') });
     }
-    for (const name of Object.keys(out)) if (!(name in contract.inputs)) problems.push({ name, message: '場景沒有這個入參' });
+    for (const name of Object.keys(out)) if (!(name in contract.inputs)) problems.push({ name, message: tr('場景沒有這個入參') });
   }
   return { inputs: out, problems };
 }
@@ -211,7 +222,7 @@ export function evaluateExpect(action, output, { object, groups }) {
     const actual = output ? lookup(output, e.output) : undefined;
     if (e.nonEmpty) {
       const empty = actual === undefined || actual === null || (typeof actual === 'string' && !actual.trim()) || (Array.isArray(actual) && !actual.length) || (typeof actual === 'object' && actual && !Array.isArray(actual) && !Object.keys(actual).length);
-      if (empty) failures.push({ output: e.output, rule: 'nonEmpty', expected: '非空', actual: actual ?? null });
+      if (empty) failures.push({ output: e.output, rule: 'nonEmpty', expected: tr('非空'), actual: actual ?? null });
     } else {
       const expected = renderValue(e.equals, ctx);
       if (actual === undefined || actual === null || !sameValue(actual, expected)) failures.push({ output: e.output, rule: 'equals', expected, actual: actual ?? null });

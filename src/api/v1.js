@@ -6,6 +6,7 @@ import { buildPrompt, buildSchema } from '../services/prompt.js';
 import { buildOpenApi } from './openapi.js';
 import { RuleError } from '../store/validity.js';
 import { kindOfId } from '../store/model.js';
+import { tr } from '../i18n/index.js';
 import { RpaClient, RpaError, conformance, draftAction } from '../services/rpa.js';
 import { executionView } from '../services/executions.js';
 import { parseLocator, renderSceneInputs, renderValue } from '../store/rpa.js';
@@ -35,7 +36,7 @@ export function baseUrlOf(ctx, req) {
 function resolveRefs(value, refs, index) {
   if (typeof value === 'string' && value.startsWith('$ref:')) {
     const name = value.slice(5);
-    if (!refs.has(name)) throw new RuleError(`第 ${index} 條引用了未定義的 ref「${name}」（ref 必須在前面的條目中定義）`, 400, 'unknown_ref');
+    if (!refs.has(name)) throw new RuleError(tr('第 {index} 條引用了未定義的 ref「{name}」（ref 必須在前面的條目中定義）', { index, name }), 400, 'unknown_ref');
     return refs.get(name);
   }
   if (Array.isArray(value)) return value.map(v => resolveRefs(v, refs, index));
@@ -50,7 +51,7 @@ async function rpaCall(fn) {
   } catch (err) {
     if (!(err instanceof RpaError)) throw err;
     const code = err.code?.startsWith('rpa_') ? err.code : `rpa_${err.code}`;
-    throw new HttpError(err.status === 404 ? 404 : 502, `RPA：${err.message}`, code);
+    throw new HttpError(err.status === 404 ? 404 : 502, tr('RPA：{message}', { message: err.message }), code);
   }
 }
 
@@ -59,15 +60,15 @@ export function v1Router(ctx) {
   const S = () => ctx.store;
   const rpaPipeline = id => {
     const p = S().pipelines.get(id);
-    if (!p) throw new HttpError(404, `找不到管道 ${id}`, 'not_found');
-    if (p.type !== 'rpa') throw new HttpError(400, `管道 ${id} 不是 RPA 管道`, 'not_rpa_pipeline');
+    if (!p) throw new HttpError(404, tr('找不到管道 {id}', { id }), 'not_found');
+    if (p.type !== 'rpa') throw new HttpError(400, tr('管道 {id} 不是 RPA 管道', { id }), 'not_rpa_pipeline');
     return p;
   };
   const rpaAction = id => {
     const a = S().actions.get(id);
-    if (!a) throw new HttpError(404, `找不到 Action ${id}`, 'not_found');
+    if (!a) throw new HttpError(404, tr('找不到 Action {id}', { id }), 'not_found');
     const p = S().pipelines.get(a.pipelineId);
-    if (p?.type !== 'rpa') throw new HttpError(400, `Action ${id} 不是 RPA Action`, 'not_rpa_action');
+    if (p?.type !== 'rpa') throw new HttpError(400, tr('Action {id} 不是 RPA Action', { id }), 'not_rpa_action');
     return { action: a, pipeline: p };
   };
   const clientOf = p => new RpaClient(p, { env: ctx.env, fetchImpl: ctx.fetch });
@@ -81,7 +82,7 @@ export function v1Router(ctx) {
     res.type('text/markdown; charset=utf-8').send(markdown);
   });
   r.get('/prompt/:role', (req, res) => {
-    if (!['producer', 'consumer'].includes(req.params.role)) throw new HttpError(404, 'role 必須為 producer 或 consumer', 'not_found');
+    if (!['producer', 'consumer'].includes(req.params.role)) throw new HttpError(404, tr('{field} 必須為 {values}', { field: 'role', values: 'producer / consumer' }), 'not_found');
     const markdown = buildPrompt({ store: S(), baseUrl: baseUrlOf(ctx, req), role: req.params.role });
     if (req.query.format === 'json') return ok(res, { role: req.params.role, format: 'markdown', prompt: markdown, version: '0.1' });
     res.type('text/markdown; charset=utf-8').send(markdown);
@@ -93,7 +94,7 @@ export function v1Router(ctx) {
   // ------------------------------------------------------------ 消費：讀取
   r.get('/resolve', consumer, (req, res) => {
     const text = String(req.query.text || '');
-    if (!text) throw new HttpError(400, 'text 必填', 'invalid_input');
+    if (!text) throw new HttpError(400, tr('{field} 必填', { field: 'text' }), 'invalid_input');
     const out = S().resolveTerms(text);
     ok(res, { ...out, canonical: out.canonical.map(id => S().subjectSummary(S().subjects.get(id))) });
   });
@@ -190,8 +191,8 @@ export function v1Router(ctx) {
 
   r.post('/batch', contributor, async (req, res) => {
     const items = req.body?.items;
-    if (!Array.isArray(items) || !items.length) throw new HttpError(400, 'items 必須為非空陣列', 'invalid_input');
-    if (items.length > 500) throw new HttpError(400, '單批最多 500 條', 'invalid_input');
+    if (!Array.isArray(items) || !items.length) throw new HttpError(400, tr('items 必須為非空陣列'), 'invalid_input');
+    if (items.length > 500) throw new HttpError(400, tr('單批最多 {n} 條', { n: 500 }), 'invalid_input');
     const message = `[批量] ${String(req.body.message || '批量提交').slice(0, 100)}（${items.length} 條）`;
     const st = S();
     const out = await st.tx(req.principal, message, t => {
@@ -213,12 +214,12 @@ export function v1Router(ctx) {
             case 'evidence.add': r2 = st.addEvidence(t, d.id, d, req.principal); break;
             case 'conflict.create': r2 = st.reportConflict(t, d, req.principal); break;
             case 'feedback.create': r2 = st.submitFeedback(t, d, req.principal); break;
-            default: throw new RuleError(`未知 op「${it.op}」`, 400, 'unknown_op');
+            default: throw new RuleError(tr('未知 op「{op}」', { op: it.op }), 400, 'unknown_op');
           }
           if (it.ref) refs.set(String(it.ref), r2.id);
           results.push({ index: i, op: it.op, ref: it.ref || null, id: r2.id, level: r2.validity?.level ?? r2.level ?? null });
         } catch (err) {
-          err.message = `第 ${i} 條（${it.op}${it.ref ? ` ref=${it.ref}` : ''}）：${err.message}；整批已回滾`;
+          err.message = tr('第 {index} 條（{op}）：{message}；整批已回滾', { index: i, op: `${it.op}${it.ref ? ` ref=${it.ref}` : ''}`, message: err.message });
           err.index = i;
           throw err;
         }
@@ -245,7 +246,7 @@ export function v1Router(ctx) {
   r.post('/action-executions/:id/refresh', contributor, (req, res) => {
     const e = ctx.executions.get(req.params.id);
     const action = S().actions.get(e.actionId);
-    if (action && !ctx.actions.canInvoke(action, req.principal)) throw new HttpError(403, `無權調用 Action ${action.id}`, 'forbidden');
+    if (action && !ctx.actions.canInvoke(action, req.principal)) throw new HttpError(403, tr('無權調用 Action {id}（需要 {role}）', { id: action.id, role: action.permission }), 'forbidden');
     ok(res, executionView(ctx.executions.refresh(req.params.id)), {}, 202);
   });
   r.post('/validate-all', owner, async (req, res) => ok(res, await ctx.actions.validateAll(req.principal, { onlyPending: req.body?.onlyPending === true })));
@@ -287,7 +288,7 @@ export function v1Router(ctx) {
     txOut(res, out, 201);
   });
   r.put('/pipelines/:id', owner, async (req, res) => {
-    if (!S().pipelines.has(req.params.id)) throw new HttpError(404, `找不到管道 ${req.params.id}`, 'not_found');
+    if (!S().pipelines.has(req.params.id)) throw new HttpError(404, tr('找不到管道 {id}', { id: req.params.id }), 'not_found');
     const out = await S().tx(req.principal, `[動力層] 更新管道 ${req.params.id}`, t => S().upsertPipeline(t, { ...req.body, id: req.params.id }, req.principal));
     txOut(res, out);
   });
@@ -315,7 +316,7 @@ export function v1Router(ctx) {
     const number = Number(req.query.revision) || scene.publishedRevision;
     const roles = await client.roles().then(x => listOf(x, 'roles')).catch(() => null);
     const registered = [...S().actions.values()].filter(a => a.pipelineId === p.id && a.rpa?.sceneId === scene.id);
-    if (!number) return ok(res, { scene, revision: null, contract: null, conformance: [{ rule: 'R2', level: 'error', text: '沒有發布的版本，不能註冊' }], draft: null, actions: registered });
+    if (!number) return ok(res, { scene, revision: null, contract: null, conformance: [{ rule: 'R2', level: 'error', text: tr('沒有發布的版本，不能註冊') }], draft: null, actions: registered });
     const { revision, contract } = await rpaCall(() => client.contract(scene.id, number));
     const { files, ...revisionMeta } = revision;
     ok(res, {
@@ -334,8 +335,8 @@ export function v1Router(ctx) {
     const object = req.body?.objectId ? S().getObject(req.body.objectId) : { id: null, name: null, locator: String(req.body?.locator || '') };
     const out = { objectId: object.id, locator: object.locator, groups: null, inputs: null, expect: null, problems: [], warnings: [] };
     if (object.id) {
-      if (!(object.actionIds || []).includes(action.id)) out.warnings.push(`Action ${action.id} 還沒有掛在客體 ${object.id} 上`);
-      if (action.objectKinds?.length && !action.objectKinds.includes(object.kind)) out.warnings.push(`客體種類 ${object.kind || '未標'} 不在 Action 適用的 ${action.objectKinds.join('、')} 內`);
+      if (!(object.actionIds || []).includes(action.id)) out.warnings.push(tr('Action {id} 還沒有掛在客體 {object} 上', { id: action.id, object: object.id }));
+      if (action.objectKinds?.length && !action.objectKinds.includes(object.kind)) out.warnings.push(tr('客體種類 {kind} 不在 Action 適用的 {kinds} 內', { kind: object.kind || tr('未標種類'), kinds: action.objectKinds.join(tr('、')) }));
     }
     try {
       out.groups = parseLocator(action, object.locator);
@@ -343,7 +344,7 @@ export function v1Router(ctx) {
       out.problems.push({ name: 'locator', code: err.code, message: err.message });
       return ok(res, out);
     }
-    const contract = await ctx.executions.contractFor(pipeline, action).then(x => x.contract).catch(err => { out.warnings.push(`讀不到場景契約，未按場景宣告檢查：${err.message}`); return null; });
+    const contract = await ctx.executions.contractFor(pipeline, action).then(x => x.contract).catch(err => { out.warnings.push(tr('讀不到場景契約，未按場景宣告檢查：{message}', { message: err.message })); return null; });
     const rendered = renderSceneInputs(action, { object, groups: out.groups }, contract);
     out.inputs = rendered.inputs;
     out.problems.push(...rendered.problems);
@@ -353,17 +354,17 @@ export function v1Router(ctx) {
   // 審閱新版本：負責人確認只讀後，把 Action 鎖到場景目前的發布版本（或指定版本）
   r.post('/actions/:id/review', owner, async (req, res) => {
     const { action, pipeline } = rpaAction(req.params.id);
-    if (req.body?.readOnly !== true) throw new HttpError(400, '審閱需要確認場景只讀、沒有業務副作用（readOnly: true）', 'review_required');
+    if (req.body?.readOnly !== true) throw new HttpError(400, tr('審閱需要確認場景只讀、沒有業務副作用（readOnly: true）'), 'review_required');
     const client = clientOf(pipeline);
     const scene = await rpaCall(() => client.scene(action.rpa.sceneId));
     const number = Number(req.body?.revision) || scene.publishedRevision;
-    if (!number) throw new HttpError(409, `場景 ${scene.id} 沒有發布的版本`, 'not_published');
-    if (number !== scene.publishedRevision) throw new HttpError(409, `只能審閱目前的發布版本 v${scene.publishedRevision}`, 'revision_not_published');
+    if (!number) throw new HttpError(409, tr('場景 {id} 沒有發布的版本', { id: scene.id }), 'not_published');
+    if (number !== scene.publishedRevision) throw new HttpError(409, tr('只能審閱目前的發布版本 v{n}', { n: scene.publishedRevision }), 'revision_not_published');
     const { revision, contract } = await rpaCall(() => client.contract(scene.id, number));
     const mapped = Object.keys(action.rpa.inputs || {});
     const drift = [
-      ...mapped.filter(n => !(n in contract.inputs)).map(n => `場景 v${number} 沒有入參 ${n}；請修改 rpa.inputs`),
-      ...Object.entries(contract.inputs).filter(([n, sp]) => !mapped.includes(n) && sp.default === undefined).map(([n]) => `場景 v${number} 的入參 ${n} 沒有映射，也沒有預設值；請修改 rpa.inputs`)
+      ...mapped.filter(n => !(n in contract.inputs)).map(n => tr('場景 v{n} 沒有入參 {name}；請修改 rpa.inputs', { n: number, name: n })),
+      ...Object.entries(contract.inputs).filter(([n, sp]) => !mapped.includes(n) && sp.default === undefined).map(([n]) => tr('場景 v{n} 的入參 {name} 沒有映射，也沒有預設值；請修改 rpa.inputs', { n: number, name: n }))
     ];
     const input = { ...action, rpa: { ...action.rpa, revision: number, contentHash: revision.contentHash, loginRole: contract.loginRole }, review: { readOnly: true }, enabled: req.body?.enabled ?? action.enabled };
     const out = await S().tx(req.principal, `[動力層] 審閱 Action ${action.id}：${scene.id} v${action.rpa.revision} → v${number}`, t => {
@@ -384,7 +385,7 @@ export function v1Router(ctx) {
     txOut(res, out, 201);
   });
   r.put('/actions/:id', owner, async (req, res) => {
-    if (!S().actions.has(req.params.id)) throw new HttpError(404, `找不到 Action ${req.params.id}`, 'not_found');
+    if (!S().actions.has(req.params.id)) throw new HttpError(404, tr('找不到 Action {id}', { id: req.params.id }), 'not_found');
     const out = await S().tx(req.principal, `[動力層] 更新 Action ${req.params.id}`, t => S().upsertAction(t, { ...req.body, id: req.params.id }, req.principal));
     txOut(res, out);
   });
@@ -396,7 +397,7 @@ export function v1Router(ctx) {
     txOut(res, out);
   });
 
-  r.use((req, res, next) => next(new HttpError(404, `未知端點 ${req.method} ${req.baseUrl}${req.path}`, 'not_found')));
+  r.use((req, res, next) => next(new HttpError(404, tr('未知端點 {endpoint}', { endpoint: `${req.method} ${req.baseUrl}${req.path}` }), 'not_found')));
   return r;
 }
 

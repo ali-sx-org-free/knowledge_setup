@@ -156,6 +156,14 @@ test('校驗：202 受理，異步執行，守衛通過後 L1 → L0 並留下�
   assert.match(log, new RegExp(`\\[校驗\\] ${actionId} → ${bindingId}：pass（RPA 運行 ${run.id}`));
   const list = await t.admin('GET', `/api/v1/action-executions?itemId=${bindingId}`);
   assert.equal(list.body.data[0].id, exec.id);
+  // 說明按請求語言返回；保存的 detail 與寫進倉庫的 lastCheck.detail 是繁體原文
+  assert.match(exec.detail, /^守衛全部通過：databaseName = "adb_wdk_scm_dpartner"；/);
+  assert.equal(b.validity.lastCheck.detail, exec.detail);
+  const en = await t.admin('GET', `/api/v1/action-executions/${exec.id}?lang=en`);
+  assert.match(en.body.data.detailText, /^All guards passed: databaseName = "adb_wdk_scm_dpartner"; .*; createTableSql not empty$/);
+  assert.equal(en.body.data.stateName, 'Done');
+  const cn = await t.admin('GET', `/api/v1/action-executions/${exec.id}?lang=zh-CN`);
+  assert.match(cn.body.data.detailText, /^守卫全部通过：/);
 
   const renew = await agent('POST', `/api/v1/validate/${bindingId}`, { actionId });
   const second = await settle(renew.body.data.executionId);

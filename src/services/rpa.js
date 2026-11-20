@@ -2,6 +2,7 @@
 // 參考 web_browser_robotic_process_automation 的 apps/server/src/rpa_server/agent_api.py。
 import YAML from 'yaml';
 import { renderTemplate } from './template.js';
+import { tr, tk } from '../i18n/index.js';
 
 /** RPA 返回錯誤或連不上。status 0 表示網絡錯誤或逾時（可以用同一個冪等鍵重試）。 */
 export class RpaError extends Error {
@@ -38,7 +39,7 @@ export class RpaClient {
       res = await this.fetch(this.base + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body), signal: AbortSignal.timeout(this.pipeline.timeoutMs || 10000) });
     } catch (err) {
       const timeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
-      throw new RpaError(timeout ? `RPA 請求逾時（${this.pipeline.timeoutMs || 10000} ms）：${method} ${path}` : `RPA 不可達：${err.message}`, { code: timeout ? 'rpa_timeout' : 'rpa_unreachable' });
+      throw new RpaError(timeout ? tr('RPA 請求逾時（{ms} ms）：{request}', { ms: this.pipeline.timeoutMs || 10000, request: `${method} ${path}` }) : tr('RPA 不可達：{message}', { message: err.message }), { code: timeout ? 'rpa_timeout' : 'rpa_unreachable' });
     }
     const text = await res.text();
     let data = null;
@@ -46,9 +47,9 @@ export class RpaClient {
     if (!res.ok) {
       const e = data?.error || {};
       const { code, message, ...details } = e;
-      throw new RpaError(`RPA 返回 ${res.status}${code ? ` ${code}` : ''}：${message || text.slice(0, 200) || res.statusText}`, { status: res.status, code: code || `http_${res.status}`, details });
+      throw new RpaError(tr('RPA 返回 {status}：{message}', { status: code ? `${res.status} ${code}` : res.status, message: message || text.slice(0, 200) || res.statusText }), { status: res.status, code: code || `http_${res.status}`, details });
     }
-    if (data === null) throw new RpaError(`RPA 返回的不是 JSON：${method} ${path}`, { status: res.status, code: 'rpa_bad_response' });
+    if (data === null) throw new RpaError(tr('RPA 返回的不是 JSON：{request}', { request: `${method} ${path}` }), { status: res.status, code: 'rpa_bad_response' });
     return data;
   }
 
@@ -76,7 +77,7 @@ export class RpaClient {
   async contract(sceneId, number) {
     const rev = await this.revision(sceneId, number);
     const text = rev.files?.['scenario.yaml'];
-    if (typeof text !== 'string') throw new RpaError(`場景 ${sceneId} v${number} 沒有 scenario.yaml`, { status: 200, code: 'rpa_bad_response' });
+    if (typeof text !== 'string') throw new RpaError(tr('場景 {id} v{n} 沒有 scenario.yaml', { id: sceneId, n: number }), { status: 200, code: 'rpa_bad_response' });
     return { revision: rev, contract: parseScenario(text) };
   }
 }
@@ -84,7 +85,7 @@ export class RpaClient {
 /** 解析場景檔：只取知識庫用得到的契約欄位。 */
 export function parseScenario(text) {
   let doc;
-  try { doc = YAML.parse(text) || {}; } catch (err) { throw new RpaError(`場景檔無法解析：${err.message}`, { status: 200, code: 'rpa_bad_response' }); }
+  try { doc = YAML.parse(text) || {}; } catch (err) { throw new RpaError(tr('場景檔無法解析：{message}', { message: err.message }), { status: 200, code: 'rpa_bad_response' }); }
   const spec = v => (v && typeof v === 'object' ? v : {});
   const inputs = Object.fromEntries(Object.entries(spec(doc.inputs)).map(([k, v]) => [k, { type: v?.type || 'string', description: v?.description || null, enum: Array.isArray(v?.enum) ? v.enum : null, pattern: v?.pattern || null, default: v?.default ?? undefined }]));
   const outputs = Object.fromEntries(Object.entries(spec(doc.outputs)).map(([k, v]) => [k, { type: v?.type || 'string', description: v?.description || null }]));
@@ -103,6 +104,7 @@ export function parseScenario(text) {
   };
 }
 
+const ROLE_STATUS = { logged_in: tk('已登入'), needs_login: tk('需要人工登入'), none: tk('從未登入'), unknown: tk('狀態未知') };
 const stem = name => String(name).replace(/(Prefix|Name|Id|Code|Key)$/, '').toLowerCase();
 
 /**
@@ -112,22 +114,22 @@ const stem = name => String(name).replace(/(Prefix|Name|Id|Code|Key)$/, '').toLo
 export function conformance(scene, contract, roles = null) {
   const out = [];
   const add = (rule, level, text) => out.push({ rule, level, text });
-  add('R2', scene.publishedRevision ? 'ok' : 'error', scene.publishedRevision ? `已發布 v${scene.publishedRevision}` : '沒有發布的版本，不能註冊');
-  if (scene.archived) add('R2', 'error', '場景已歸檔');
+  add('R2', scene.publishedRevision ? 'ok' : 'error', scene.publishedRevision ? tr('已發布 v{n}', { n: scene.publishedRevision }) : tr('沒有發布的版本，不能註冊'));
+  if (scene.archived) add('R2', 'error', tr('場景已歸檔'));
   const outs = Object.keys(contract.outputs);
   const ins = Object.keys(contract.inputs);
-  add('R3', outs.length ? 'ok' : 'error', outs.length ? `出參 ${outs.join('、')}` : '沒有出參：知識庫無法確認場景查的是哪個對象');
-  add('R3', contract.verifyCount ? 'ok' : 'warn', contract.verifyCount ? `獨立斷言 ${contract.verifyCount} 條` : '沒有獨立斷言（verify）');
+  add('R3', outs.length ? 'ok' : 'error', outs.length ? tr('出參 {list}', { list: outs.join(tr('、')) }) : tr('沒有出參：知識庫無法確認場景查的是哪個對象'));
+  add('R3', contract.verifyCount ? 'ok' : 'warn', contract.verifyCount ? tr('獨立斷言 {n} 條', { n: contract.verifyCount }) : tr('沒有獨立斷言（verify）'));
   const echoed = outs.filter(o => ins.some(i => i === o || stem(i) === stem(o)));
-  add('R3', echoed.length ? 'ok' : 'warn', echoed.length ? `出參回顯了入參：${echoed.join('、')}` : '出參沒有回顯任何入參，無法逐項比對');
-  add('R4', contract.deadlineMs ? 'ok' : 'warn', contract.deadlineMs ? `整次期限 ${Math.round(contract.deadlineMs / 1000)} 秒` : '沒有宣告 deadline，知識庫只能用管道的整體期限');
+  add('R3', echoed.length ? 'ok' : 'warn', echoed.length ? tr('出參回顯了入參：{list}', { list: echoed.join(tr('、')) }) : tr('出參沒有回顯任何入參，無法逐項比對'));
+  add('R4', contract.deadlineMs ? 'ok' : 'warn', contract.deadlineMs ? tr('整次期限 {n} 秒', { n: Math.round(contract.deadlineMs / 1000) }) : tr('沒有宣告 deadline，知識庫只能用管道的整體期限'));
   if (contract.loginRole) {
     const role = roles?.find(r => r.id === contract.loginRole);
-    if (!roles) add('R5', 'warn', `登入角色 ${contract.loginRole}（無法讀取登入狀態）`);
-    else if (!role) add('R5', 'error', `登入角色 ${contract.loginRole} 沒有綁定給這個 API 用戶端（RPA 會回 403 login_role_forbidden）`);
-    else add('R5', role.status === 'logged_in' ? 'ok' : 'warn', `登入角色 ${contract.loginRole}：${{ logged_in: '已登入', needs_login: '需要人工登入', none: '從未登入', unknown: '狀態未知' }[role.status] || role.status}`);
-  } else add('R5', 'ok', '不需要登入角色');
-  if (contract.script) add('R1', 'warn', '這是 Python 腳本場景：審閱只讀時請特別留意腳本內容');
+    if (!roles) add('R5', 'warn', tr('登入角色 {role}（無法讀取登入狀態）', { role: contract.loginRole }));
+    else if (!role) add('R5', 'error', tr('登入角色 {role} 沒有綁定給這個 API 用戶端（RPA 會回 403 login_role_forbidden）', { role: contract.loginRole }));
+    else add('R5', role.status === 'logged_in' ? 'ok' : 'warn', tr('登入角色 {role}：{status}', { role: contract.loginRole, status: ROLE_STATUS[role.status] ? tr(ROLE_STATUS[role.status]) : role.status }));
+  } else add('R5', 'ok', tr('不需要登入角色'));
+  if (contract.script) add('R1', 'warn', tr('這是 Python 腳本場景：審閱只讀時請特別留意腳本內容'));
   return out;
 }
 

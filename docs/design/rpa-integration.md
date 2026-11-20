@@ -486,4 +486,5 @@ lastCheck:
 - **期限。** 受理時先給 `deadlineSec`（管道未設時 900 秒）；提交成功後改為「管道 `deadlineSec`」或「場景 `deadline` + `queueTimeoutSec` + 60 秒」。RPA 一直不可用時，受理狀態的執行在期限到後記為 `expired · deadline`。
 - **登入角色預檢**把 `needs_login` 和 `none`（從未登入）都視為需要登入；讀不到角色清單時照常派發，由 RPA 判斷。
 - **終態在寫回之後才出現。** 判定通過時先寫回，再把狀態轉為 `done`，讀到 `done` 時 `effect` 和 `commit` 已確定。
+- **多語言。** 錯誤、體檢、規範檢查和後台文字按請求語言返回（繁體、簡體、英文）。執行說明以「原文 + 參數」保存，`detail` 是繁體原文，API 另外返回按請求語言翻譯的 `detailText`、`reasonText`、`stateName`；寫進知識倉庫的提交說明、`lastCheck.detail` 和層級歷史備註保持繁體原文，後台顯示時再翻譯。
 - **主要程式位置：** `src/store/rpa.js`（規範化、定位解析、入參渲染、守衛、證據）、`src/services/rpa.js`（Agent API 客戶端、場景契約解析、規範檢查、草稿）、`src/services/executions.js`（執行服務）、`KnowledgeStore.applyExecutionResult`（寫回前的過期檢查）、`test/rpa.test.js`（模擬 RPA 的端到端測試）。

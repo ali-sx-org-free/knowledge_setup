@@ -16,12 +16,15 @@ import { LlmClient } from './services/llm.js';
 import { Auth, HttpError } from './api/auth.js';
 import { v1Router } from './api/v1.js';
 import { adminRouter } from './api/admin.js';
+import { localeMiddleware, setDefaultLocale, tr } from './i18n/index.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(here, '..', 'web');
 const SYSTEM = Object.freeze({ id: 'system', name: '保鮮觸發器', kind: 'system', role: 'owner', isAdmin: false });
 
 export async function createServer({ dataDir = process.env.DATA_DIR || path.join(here, '..', 'data'), env = process.env, fetchImpl = globalThis.fetch, logger = console, schedulers = true, executions = {} } = {}) {
+  // 預設語言：請求沒有 ?lang= 與可用的 Accept-Language 時使用，也用於日誌與排程任務。
+  setDefaultLocale(env.KNOWLEDGE_LANG);
   const settings = new Settings(dataDir, env);
   const ctx = { settings, env, logger, dataDir, fetch: fetchImpl };
   ctx.llm = new LlmClient({ settings, fetchImpl });
@@ -57,6 +60,7 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', true);
+  app.use(localeMiddleware());
   app.use(express.json({ limit: '4mb' }));
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -76,10 +80,10 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
     let status = err.status || err.statusCode || 500;
     let code = typeof err.code === 'string' ? err.code : status < 500 ? STATUS_CODES[status] || 'error' : 'internal_error';
     let message = err.message;
-    if (err.type === 'entity.parse.failed') { status = 400; code = 'invalid_json'; message = `請求體不是合法的 JSON：${err.message}`; }
-    if (err.type === 'entity.too.large') message = '請求體過大（上限 4 MB）';
+    if (err.type === 'entity.parse.failed') { status = 400; code = 'invalid_json'; message = tr('請求體不是合法的 JSON：{error}', { error: err.message }, req.locale); }
+    if (err.type === 'entity.too.large') message = tr('請求體過大（上限 {limit}）', { limit: '4 MB' }, req.locale);
     if (!(err instanceof RuleError) && !(err instanceof HttpError) && status >= 500) logger.error?.(`[knowledge] ${req.method} ${req.originalUrl}`, err);
-    const body = { error: { code, message: status >= 500 && !(err instanceof RuleError) && !(err instanceof HttpError) && !err.code ? '服務內部錯誤' : message } };
+    const body = { error: { code, message: status >= 500 && !(err instanceof RuleError) && !(err instanceof HttpError) && !err.code ? tr('服務內部錯誤', null, req.locale) : message } };
     if (err.index !== undefined) body.error.index = err.index;
     if (err.missing) body.error.missing = err.missing;
     if (err.problems) body.error.problems = err.problems;
@@ -87,7 +91,7 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
   });
 
   const timers = [];
-  const every = (ms, fn) => timers.push(setInterval(() => fn().catch(err => logger.warn?.(`[knowledge] 排程任務失敗：${err.message}`)), ms));
+  const every = (ms, fn) => timers.push(setInterval(() => fn().catch(err => logger.warn?.(`[knowledge] ${tr('排程任務失敗：{error}', { error: err.message })}`)), ms));
   if (schedulers) {
     every(30000, () => ctx.store.flushLazy());
     every(Math.max(15, Number(settings.value('git.pullIntervalSec')) || 60) * 1000, async () => { if (ctx.store.repo.url) await ctx.store.sync(); });
@@ -99,7 +103,7 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
       lastValidation = Date.now();
       await ctx.actions.validateAll(SYSTEM, {});
     });
-    ctx.runExpirySweep().catch(err => logger.warn?.(`[knowledge] 到期檢查失敗：${err.message}`));
+    ctx.runExpirySweep().catch(err => logger.warn?.(`[knowledge] ${tr('到期檢查失敗：{error}', { error: err.message })}`));
   }
 
   let server;
@@ -135,10 +139,10 @@ if (isMain()) {
   const port = Number(process.env.PORT) || 8080;
   await srv.listen(port);
   const g = srv.ctx.store.repo.status;
-  console.log(`[knowledge] 服務已啟動：http://localhost:${port}`);
-  console.log(`[knowledge] 知識倉庫：${g.remote || '本地倉庫（未配置遠端）'} · 分支 ${g.branch} · 認證 ${srv.ctx.store.repo.authMode()} · 目錄 ${srv.ctx.store.repo.dir}`);
-  console.log(`[knowledge] 智能體教程：http://localhost:${port}/api/v1/prompt`);
-  if (srv.ctx.settings.generatedAdminPassword) console.log(`[knowledge] 初始管理員密碼：${srv.ctx.settings.generatedAdminPassword}`);
+  console.log(`[knowledge] ${tr('服務已啟動：{url}', { url: `http://localhost:${port}` })}`);
+  console.log(`[knowledge] ${tr('知識倉庫：{remote} · 分支 {branch} · 認證 {auth} · 目錄 {dir}', { remote: g.remote || tr('本地倉庫（未配置遠端）'), branch: g.branch, auth: srv.ctx.store.repo.authMode(), dir: srv.ctx.store.repo.dir })}`);
+  console.log(`[knowledge] ${tr('智能體教程：{url}', { url: `http://localhost:${port}/api/v1/prompt` })}`);
+  if (srv.ctx.settings.generatedAdminPassword) console.log(`[knowledge] ${tr('初始管理員密碼：{password}', { password: srv.ctx.settings.generatedAdminPassword })}`);
   const shutdown = async () => { await srv.close(); process.exit(0); };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
