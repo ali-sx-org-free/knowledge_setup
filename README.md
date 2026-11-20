@@ -30,6 +30,8 @@ ADMIN_PASSWORD='請換成你的密碼' npm start
 
 也可以全部用環境變數配置，見 [.env.example](.env.example)。容器部署：`docker build -t knowledge . && docker run -p 8080:8080 -v knowledge-data:/data -e ADMIN_PASSWORD=... knowledge`。
 
+驗收本工程請按 [驗收教程](docs/acceptance-guide.md) 逐項操作，每一步都附有預期結果和截圖。
+
 ## 知識倉庫結構
 
 ```
