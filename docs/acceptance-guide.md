@@ -69,12 +69,12 @@ npm test
 **預期**：最後幾行為
 
 ```
-# tests 23
-# pass 23
+# tests 29
+# pass 29
 # fail 0
 ```
 
-合併 SSH 部署金鑰支持（PR #1）後為 28 項，機器上沒有 `sshd` 時其中一項會自動跳過。
+其中 SSH 部署金鑰的端到端一項需要本機有 `sshd`，沒有時會自動跳過（顯示為 `# skipped 1`，`# pass 28`）。
 
 這些測試覆蓋模型規則（寫入上限、晉升與降級、衝突、反饋、擁有關係唯一）和端到端流程（教程 API、權限、批量提交、6 個問答示例、Action 校驗、OpenRouter 模擬、Git 遠端推送與回拉、後台登入）。自動化測試通過後，下面的手動驗收主要確認「你親眼看到的」與設計一致。
 
@@ -521,7 +521,7 @@ grep -rn "kk_\|Acceptance-2026" <知識倉庫本地目錄>/knowledge || echo "�
 
 ### G5 SSH 部署金鑰
 
-> 這一節需要 [PR #1「知識倉庫支持以 SSH 部署金鑰關聯 Git 倉庫」](https://github.com/ali-sx-org-free/knowledge_setup/pull/1) 合併後才能做，並且要在能連上 GitHub SSH（22 端口，或 `ssh.github.com` 的 443 端口）的機器上操作。
+> 這一節要在能連上 GitHub SSH（22 端口，或 `ssh.github.com` 的 443 端口）的機器上操作。
 
 部署金鑰只屬於一個倉庫、不綁定個人帳號，適合服務長期讀寫知識倉庫。如果 G3 已經用 HTTPS 權杖接入同一個倉庫，可以直接改用 SSH，知識內容不變。
 
@@ -570,7 +570,7 @@ docker run -p 8080:8080 -v knowledge-data:/data -e ADMIN_PASSWORD='Acceptance-20
 
 | 編號 | 驗收項 | 預期結果 | 結果 |
 | --- | --- | --- | --- |
-| 1 | 自動化測試 | 全部通過（23 項；合併 PR #1 後 28 項） | ☐ |
+| 1 | 自動化測試 | 全部通過（29 項；沒有 `sshd` 時 1 項跳過） | ☐ |
 | A1 | 啟動服務 | 打印服務地址、知識倉庫、教程地址 | ☐ |
 | A2 | 登入保護 | 錯誤密碼被拒，正確密碼進入後台 | ☐ |
 | B1 | 載入示例資料 | 26 個主體；重複載入被拒 | ☐ |
@@ -597,7 +597,7 @@ docker run -p 8080:8080 -v knowledge-data:/data -e ADMIN_PASSWORD='Acceptance-20
 | G2 | 機密隔離 | 知識倉庫中沒有密碼與金鑰 | ☐ |
 | G3 | 遠端倉庫 | 測試連接、切換成功，GitHub 上可見知識檔案與提交 | ☐ |
 | G4 | 雙向同步 | GitHub 上的修改同步回後台；API 寫入推送到 GitHub | ☐ |
-| G5 | SSH 部署金鑰（PR #1 合併後） | 測試連接通過；推送與回拉正常；取消寫入權限時報 `marked as read only` | ☐ |
+| G5 | SSH 部署金鑰 | 測試連接通過；推送與回拉正常；取消寫入權限時報 `marked as read only` | ☐ |
 | H | OpenRouter（可選） | 組織方式為 OpenRouter，引用經過校驗 | ☐ |
 | I | 容器部署（可選） | 容器內可登入，資料存於卷 | ☐ |
 

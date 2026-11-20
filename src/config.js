@@ -118,8 +118,8 @@ export class Settings {
   }
 
   setAdminPassword(password) {
-    if (this.env.ADMIN_PASSWORD) throw Object.assign(new Error('管理員密碼由環境變數 ADMIN_PASSWORD 提供，無法在後台修改'), { status: 409 });
-    if (!password || String(password).length < 8) throw Object.assign(new Error('密碼至少 8 個字元'), { status: 400 });
+    if (this.env.ADMIN_PASSWORD) throw Object.assign(new Error('管理員密碼由環境變數 ADMIN_PASSWORD 提供，無法在後台修改'), { status: 409, code: 'password_from_env' });
+    if (!password || String(password).length < 8) throw Object.assign(new Error('密碼至少 8 個字元'), { status: 400, code: 'invalid_input' });
     const { hash, salt } = hashPassword(password);
     this.data.admin = { passwordHash: hash, salt };
     this.save();
@@ -177,10 +177,10 @@ export class Settings {
 
   // ---- API 金鑰 ----
   createApiKey({ name, kind, role }) {
-    if (!['human', 'agent', 'pipeline'].includes(kind)) throw Object.assign(new Error('kind 必須為 human / agent / pipeline'), { status: 400 });
-    if (!['consumer', 'contributor', 'owner'].includes(role)) throw Object.assign(new Error('role 必須為 consumer / contributor / owner'), { status: 400 });
-    if (role === 'owner' && kind !== 'human') throw Object.assign(new Error('負責人（owner）只能是人；智能體不能晉升知識'), { status: 400 });
-    if (!name || !String(name).trim()) throw Object.assign(new Error('請填寫名稱'), { status: 400 });
+    if (!['human', 'agent', 'pipeline'].includes(kind)) throw Object.assign(new Error('kind 必須為 human / agent / pipeline'), { status: 400, code: 'invalid_input' });
+    if (!['consumer', 'contributor', 'owner'].includes(role)) throw Object.assign(new Error('role 必須為 consumer / contributor / owner'), { status: 400, code: 'invalid_input' });
+    if (role === 'owner' && kind !== 'human') throw Object.assign(new Error('負責人（owner）只能是人；智能體不能晉升知識'), { status: 400, code: 'owner_must_be_human' });
+    if (!name || !String(name).trim()) throw Object.assign(new Error('請填寫名稱'), { status: 400, code: 'invalid_input' });
     const secret = 'kk_' + crypto.randomBytes(24).toString('base64url');
     const id = (kind === 'agent' ? 'agent-' : kind === 'pipeline' ? 'pipe-' : 'user-') + crypto.randomBytes(4).toString('hex');
     const record = { id, name: String(name).trim(), kind, role, hash: sha256(secret), prefix: secret.slice(0, 9), createdAt: new Date().toISOString(), lastUsedAt: null, disabled: false };
@@ -216,7 +216,7 @@ export class Settings {
 
   setApiKeyDisabled(id, disabled) {
     const k = this.data.apiKeys.find(x => x.id === id);
-    if (!k) throw Object.assign(new Error('找不到該金鑰'), { status: 404 });
+    if (!k) throw Object.assign(new Error('找不到該金鑰'), { status: 404, code: 'not_found' });
     k.disabled = !!disabled;
     this.save();
     return this.publicKey(k);
@@ -225,7 +225,7 @@ export class Settings {
   deleteApiKey(id) {
     const before = this.data.apiKeys.length;
     this.data.apiKeys = this.data.apiKeys.filter(k => k.id !== id);
-    if (before === this.data.apiKeys.length) throw Object.assign(new Error('找不到該金鑰'), { status: 404 });
+    if (before === this.data.apiKeys.length) throw Object.assign(new Error('找不到該金鑰'), { status: 404, code: 'not_found' });
     this.save();
   }
 }
