@@ -10,6 +10,7 @@ import { SshKeys } from './git/ssh.js';
 import { KnowledgeStore } from './store/store.js';
 import { RuleError } from './store/validity.js';
 import { ActionRunner } from './services/actions.js';
+import { ExecutionService } from './services/executions.js';
 import { AskService } from './services/ask.js';
 import { LlmClient } from './services/llm.js';
 import { Auth, HttpError } from './api/auth.js';
@@ -20,7 +21,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = path.join(here, '..', 'web');
 const SYSTEM = Object.freeze({ id: 'system', name: '保鮮觸發器', kind: 'system', role: 'owner', isAdmin: false });
 
-export async function createServer({ dataDir = process.env.DATA_DIR || path.join(here, '..', 'data'), env = process.env, fetchImpl = globalThis.fetch, logger = console, schedulers = true } = {}) {
+export async function createServer({ dataDir = process.env.DATA_DIR || path.join(here, '..', 'data'), env = process.env, fetchImpl = globalThis.fetch, logger = console, schedulers = true, executions = {} } = {}) {
   const settings = new Settings(dataDir, env);
   const ctx = { settings, env, logger, dataDir, fetch: fetchImpl };
   ctx.llm = new LlmClient({ settings, fetchImpl });
@@ -38,7 +39,10 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
     await store.init();
     if (ctx.store) await ctx.store.flushLazy().catch(() => {});
     ctx.store = store;
-    ctx.actions = new ActionRunner({ store, env, fetchImpl });
+    // RPA 校驗的執行記錄按倉庫分目錄（本地營運數據，不進 Git）
+    if (ctx.executions) await ctx.executions.stop();
+    ctx.executions = await new ExecutionService({ store, dir: path.join(dataDir, 'executions', slug), env, fetchImpl, logger, ...executions }).init();
+    ctx.actions = new ActionRunner({ store, env, fetchImpl, executions: ctx.executions });
     ctx.ask = new AskService({ store, actions: ctx.actions, llm: ctx.llm, logger });
     return store;
   };
@@ -78,6 +82,7 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
     const body = { error: { code, message: status >= 500 && !(err instanceof RuleError) && !(err instanceof HttpError) && !err.code ? '服務內部錯誤' : message } };
     if (err.index !== undefined) body.error.index = err.index;
     if (err.missing) body.error.missing = err.missing;
+    if (err.problems) body.error.problems = err.problems;
     res.status(status).json(body);
   });
 
@@ -106,6 +111,7 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
     },
     async close() {
       timers.forEach(clearInterval);
+      await ctx.executions?.stop();
       await ctx.store.flushLazy().catch(() => {});
       await ctx.store.flushPush().catch(() => {});
       if (server) await new Promise(r => server.close(r));

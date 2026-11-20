@@ -1,6 +1,6 @@
 # 知識庫接入 RPA：把可運行場景註冊為管道與 Action
 
-設計稿 v1 · 2026-11-20 · **狀態：待使用者確認，確認前不開始實作**
+設計稿 v1 · 2026-11-20 · **狀態：已確認，第一期已實作**（2026-11-20 使用者選擇「開工，RPA 也加版本參數」；實作與本文的差異見 §17）
 
 本文分兩部分：第一部分評審《知識庫-RPA 管道與 Action 接入方案》草稿（以下稱「草稿」），逐條對照兩個倉庫的程式碼；第二部分是修訂後的設計，可直接作為實作依據。首個用例沿用草稿：在客體 `O-0001`（`adb_wdk_scm_dpartner.replenish_order`）上，從主體 `S-PLN-0001` 的綁定 `B-0001` 發起「校驗生產表是否存在」。
 
@@ -470,8 +470,20 @@ lastCheck:
 | 與第一期並行（RPA 倉庫） | `expectedRevision`（建議）；版本契約端點（可選） |
 | 第二期 | 取值（`/ask` 返回「取值進行中」，前端輪詢）、斷言的 `equals` 比對、符合 R7 的陰性結論、定期複驗（進派發隊列，按 Action 開啟）、組合場景作為 Action |
 
-### 16. 需要你確認的事
+### 16. 決定紀錄（原「需要你確認的事」）
 
 1. 是否按本設計開始第一期實作。
 2. 是否同意在 RPA 倉庫加 `expectedRevision`。不加也能上線，代價是發布切換的瞬間，未審版本可能被執行一次並立即取消（結果不會寫回）。
 3. RPA 陰性結論（第二期）的預設處理：建議「降 L1 並等負責人確認下線」，而不是像 HTTP 404 那樣直接讓客體下線。
+
+決定：1、2 已確認（開始第一期；RPA 倉庫的 `expectedRevision` 見 RPA PR #32）。3 留到第二期再定。
+
+### 17. 第一期實作說明
+
+- **不依賴 RPA 升級。** 知識庫總是先帶 `expectedRevision` 提交；舊版 RPA（`RunBody` 禁止未知欄位）回 422 `request_invalid`、`problems` 指向 `body.expectedRevision` 時，自動改為不帶並按管道記住，改用 §8.2 的預檢、202 後比對並取消、結束後比對 `scenarioHash`。已對 RPA main（v0.10.0）實測：失敗的請求不消耗冪等鍵，用同一個鍵重送正常排入。
+- **校驗入口的檢查。** 指定 `actionId` 時，所有管道都檢查 Action 已啟用、掛在條目的客體上（422 `action_not_attached`）、客體種類適用（422 `object_kind_mismatch`）、調用者滿足 `permission`（403）。E1 拒絕（409 `item_invalid`）只對 RPA 生效，HTTP / mock 管道保持原來的 `skipped_e1` 行為。
+- **新增試運行端點** `POST /actions/{id}/trial {objectId}`（owner）：走完整執行流程，執行記錄 `dryRun: true`、`effect: dry_run`，不寫回，也不參與防雙擊。
+- **期限。** 受理時先給 `deadlineSec`（管道未設時 900 秒）；提交成功後改為「管道 `deadlineSec`」或「場景 `deadline` + `queueTimeoutSec` + 60 秒」。RPA 一直不可用時，受理狀態的執行在期限到後記為 `expired · deadline`。
+- **登入角色預檢**把 `needs_login` 和 `none`（從未登入）都視為需要登入；讀不到角色清單時照常派發，由 RPA 判斷。
+- **終態在寫回之後才出現。** 判定通過時先寫回，再把狀態轉為 `done`，讀到 `done` 時 `effect` 和 `commit` 已確定。
+- **主要程式位置：** `src/store/rpa.js`（規範化、定位解析、入參渲染、守衛、證據）、`src/services/rpa.js`（Agent API 客戶端、場景契約解析、規範檢查、草稿）、`src/services/executions.js`（執行服務）、`KnowledgeStore.applyExecutionResult`（寫回前的過期檢查）、`test/rpa.test.js`（模擬 RPA 的端到端測試）。

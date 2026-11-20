@@ -104,8 +104,8 @@ knowledge/
   subjects/S-INV-0012.yaml 主體；其下掛客體綁定 bindings 與斷言 assertions
   objects/O-0001.yaml      客體（數字 / 制度 / 物理）
   relations/R-0001.yaml    主體之間的關係（10 種閉集），帶有效性
-  actions/ACT-0001.yaml    Action（校驗 / 取值，只讀）
-  pipelines/P-0001.yaml    管道（憑證以 ${env:變數} 引用，不入庫）
+  actions/ACT-0001.yaml    Action（校驗 / 取值，只讀；RPA Action 鎖定審閱過的場景版本）
+  pipelines/P-0001.yaml    管道（http / mock / rpa；憑證以 ${env:變數} 引用，不入庫）
   governance/              衝突 C-、反饋 F-、知識缺口 G-
   stats/usage.yaml         主體被使用次數（重驗優先級、L0 覆蓋率）
 ```
@@ -130,6 +130,30 @@ knowledge/
 - 常見錯誤會附上提示：`Permission denied (publickey)`（公鑰未添加到這個倉庫）、`marked as read only`（沒有勾選 Allow write access）、`Host key verification failed`（主機指紋變了，確認後在面板清除主機指紋）。
 - SSH 地址但沒有產生部署金鑰時，沿用舊行為：使用伺服器本機的 ssh 設定。
 
+## 接入瀏覽器 RPA
+
+RPA 中審閱過的只讀場景可以註冊成「RPA 管道 + 校驗 Action」，用來確認數據表等客體真實存在，通過後把綁定從 L1 升為 L0。完整設計見 [docs/design/rpa-integration.md](docs/design/rpa-integration.md)。第一期只支持「校驗 · 客體存在」、手動發起；取值、斷言內容比對和定期複驗在第二期。
+
+**RPA 那邊的準備（只需設定，不需要升級 RPA）：**
+
+1. 在 RPA Portal 為知識庫建一個 API 用戶端，權限範圍只給 `scenes:read`、`runs:execute`、`runs:read`，關閉「回傳頁面內容」，放行場景所在的領域。
+2. 場景需要登入時（例如 `dev4dms`），把登入角色綁定給這個用戶端，並在錄製端完成一次人工登入。
+3. 把金鑰設成知識庫服務的環境變數，例如 `RPA_KB_TOKEN=…`。金鑰只在環境變數裡，不進知識倉庫。
+
+RPA 支持 `expectedRevision` 時（[RPA PR #32](https://github.com/ali-sx-org-free/web_browser_robotic_process_automation/pull/32)），版本不符由 RPA 原子拒絕；舊版 RPA 回 422 時知識庫自動改為不帶這個參數，改用派發前預檢、202 後比對版本並取消、結束後比對 `scenarioHash` 三道檢查。
+
+**在後台註冊：**
+
+1. **動力層 › 管道 › 新增 RPA 管道**：`baseUrl` 填 `http://主機:8081/agent-api/v1`（只填伺服器根地址也可以），`headers` 填 `{"Authorization": "Bearer ${env:RPA_KB_TOKEN}"}`。保存後點 **測試**：顯示 API 用戶端、權限範圍、排隊上限和在線 Worker；缺必要權限報錯，多餘權限警告。
+2. 點 **場景目錄**，打開一個場景的 **查看與註冊**：顯示發布版本的入參、出參、登入角色、期限和可註冊規範（R1–R5）檢查，並預填 Action 草稿。草稿把沒有預設值的入參按順序組成定位格式（例如 `庫名前綴.表名`），出參中回顯入參的欄位生成精確相等的守衛，其餘出參要求非空、只存雜湊。
+3. 選擇適用的客體種類、填定位示例，勾選「已審閱，無業務副作用」，保存 Action（一次 Git 提交）。
+4. 在客體的「可用 Action」裡掛上這個 Action。在 **Action** 頁點 **預覽** 檢查某個客體會提交什麼入參；**試運行** 走完整流程但不寫回。
+5. 在綁定上點 **校驗**：返回 202，後台異步執行；窗口顯示排隊、執行、判定和寫回，關閉窗口不影響執行。**動力層 › 執行記錄** 可以查全部執行。
+
+**判定：** 只有 RPA 運行 `passed`、版本和內容雜湊等於審閱版本、全部守衛通過時才寫回（L1 → L0 或 L0 續期，一次 Git 提交，證據記在 `validity.lastCheck.rpa`）。其餘一律「無法判定」或「已拒絕」，不改有效性：場景發布了新版本（Action 顯示「版本待審」，負責人點 **審閱** 鎖到新版本）、登入角色需要登入、運行失敗或逾時、出參與定位對不上（例如錯誤環境、相似前綴的庫名）等。執行期間客體定位被改、Action 被改或有更晚的結果已寫回時，結果記為「目標已變，未寫回」。
+
+執行記錄存在 `DATA_DIR/executions/<倉庫>/`，不進知識倉庫；服務重啟後未結束的執行會用原冪等鍵繼續，不會重複派發。
+
 ## 設計文件到實作的對應
 
 | 設計要求 | 實作位置 |
@@ -146,6 +170,7 @@ knowledge/
 | 別名三條規則（只經別名關係、可一詞多義、檢索先解析） | `createSubject`、`resolveTerms` |
 | 有效期初值 30 / 90 / 180 天，負責人可按主體調整 | `config.yaml`、主體 `expiryDays` |
 | 動態值不存儲，經取值 Action 實時獲取；MVP 只讀 | `src/services/actions.js` |
+| RPA 管道與校驗 Action：場景契約、草稿、版本鎖定、異步執行與判定、寫回前的過期檢查 | `src/store/rpa.js`、`src/services/rpa.js`、`src/services/executions.js`、`KnowledgeStore.applyExecutionResult` |
 | 智能體使用規約 6 步（解析、動態值、按層級、引用、未收錄、反饋） | `src/services/ask.js` |
 | 三類保鮮觸發（時間、客體變更、使用反饋）；重驗按「使用頻率 × 出錯代價」排序 | 排程任務、`revalidationQueue` |
 | 健康指標：L0 覆蓋率、待重驗數、未收錄查詢數、L0 錯誤反饋數 | `KnowledgeStore.health`、後台「健康指標」 |

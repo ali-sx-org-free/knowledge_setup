@@ -6,6 +6,9 @@ import { buildPrompt, buildSchema } from '../services/prompt.js';
 import { buildOpenApi } from './openapi.js';
 import { RuleError } from '../store/validity.js';
 import { kindOfId } from '../store/model.js';
+import { RpaClient, RpaError, conformance, draftAction } from '../services/rpa.js';
+import { executionView } from '../services/executions.js';
+import { parseLocator, renderSceneInputs, renderValue } from '../store/rpa.js';
 
 const consumer = requireRole('consumer');
 const contributor = requireRole('contributor');
@@ -40,9 +43,35 @@ function resolveRefs(value, refs, index) {
   return value;
 }
 
+/** RPA 的錯誤轉成知識庫的 HTTP 錯誤：找不到照舊 404，其餘一律 502（上游問題），錯誤碼帶 rpa_ 前綴。 */
+async function rpaCall(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!(err instanceof RpaError)) throw err;
+    const code = err.code?.startsWith('rpa_') ? err.code : `rpa_${err.code}`;
+    throw new HttpError(err.status === 404 ? 404 : 502, `RPA：${err.message}`, code);
+  }
+}
+
 export function v1Router(ctx) {
   const r = express.Router();
   const S = () => ctx.store;
+  const rpaPipeline = id => {
+    const p = S().pipelines.get(id);
+    if (!p) throw new HttpError(404, `找不到管道 ${id}`, 'not_found');
+    if (p.type !== 'rpa') throw new HttpError(400, `管道 ${id} 不是 RPA 管道`, 'not_rpa_pipeline');
+    return p;
+  };
+  const rpaAction = id => {
+    const a = S().actions.get(id);
+    if (!a) throw new HttpError(404, `找不到 Action ${id}`, 'not_found');
+    const p = S().pipelines.get(a.pipelineId);
+    if (p?.type !== 'rpa') throw new HttpError(400, `Action ${id} 不是 RPA Action`, 'not_rpa_action');
+    return { action: a, pipeline: p };
+  };
+  const clientOf = p => new RpaClient(p, { env: ctx.env, fetchImpl: ctx.fetch });
+  const listOf = (data, key) => (Array.isArray(data) ? data : Array.isArray(data?.[key]) ? data[key] : []);
 
   // ------------------------------------------------------------ 公開：教程、Schema、OpenAPI
   r.get('/prompt', (req, res) => {
@@ -204,7 +233,21 @@ export function v1Router(ctx) {
     const out = await S().tx(req.principal, x => `[證據] ${req.params.id} 補充證據（${x.level}）`, t => S().addEvidence(t, req.params.id, req.body || {}, req.principal));
     txOut(res, out);
   });
-  r.post('/validate/:id', contributor, async (req, res) => ok(res, await ctx.actions.validateItem(req.params.id, req.principal, { actionId: req.body?.actionId })));
+  r.post('/validate/:id', contributor, async (req, res) => {
+    const out = await ctx.actions.validateItem(req.params.id, req.principal, { actionId: req.body?.actionId });
+    if (!out.async) return ok(res, out);
+    // RPA：受理後異步執行，202 + 執行記錄地址；同一個（條目, Action）已有未結束的執行時返回那個
+    const e = out.execution;
+    ok(res, { executionId: e.id, state: e.state, deduped: out.deduped, statusUrl: `/api/v1/action-executions/${e.id}`, execution: executionView(e) }, {}, 202);
+  });
+  r.get('/action-executions', contributor, (req, res) => ok(res, ctx.executions.list({ itemId: req.query.itemId, actionId: req.query.actionId, state: req.query.state, runId: req.query.runId, pipelineId: req.query.pipelineId, limit: req.query.limit }).map(executionView)));
+  r.get('/action-executions/:id', contributor, (req, res) => ok(res, executionView(ctx.executions.get(req.params.id))));
+  r.post('/action-executions/:id/refresh', contributor, (req, res) => {
+    const e = ctx.executions.get(req.params.id);
+    const action = S().actions.get(e.actionId);
+    if (action && !ctx.actions.canInvoke(action, req.principal)) throw new HttpError(403, `無權調用 Action ${action.id}`, 'forbidden');
+    ok(res, executionView(ctx.executions.refresh(req.params.id)), {}, 202);
+  });
   r.post('/validate-all', owner, async (req, res) => ok(res, await ctx.actions.validateAll(req.principal, { onlyPending: req.body?.onlyPending === true })));
   r.post('/items/:id/confirm', owner, async (req, res) => {
     const out = await S().tx(req.principal, `[確認] ${req.params.id} → L0（負責人 ${req.principal.name}）`, t => S().confirm(t, req.params.id, req.body || {}, req.principal));
@@ -249,6 +292,93 @@ export function v1Router(ctx) {
     txOut(res, out);
   });
   r.post('/pipelines/:id/test', owner, async (req, res) => ok(res, await ctx.actions.testPipeline(req.params.id)));
+
+  // RPA 場景目錄：已發布、未歸檔的場景（?all=1 含未發布與已歸檔），標出登入角色狀態與已登記的 Action
+  r.get('/pipelines/:id/scenes', owner, async (req, res) => {
+    const p = rpaPipeline(req.params.id);
+    const client = clientOf(p);
+    const scenes = listOf(await rpaCall(() => client.scenes({ q: req.query.q, domain: req.query.domain, category: req.query.category })), 'scenes');
+    const roles = await client.roles().then(x => listOf(x, 'roles')).catch(() => null);
+    const registered = [...S().actions.values()].filter(a => a.pipelineId === p.id && a.rpa);
+    const all = req.query.all === '1';
+    ok(res, scenes.filter(sc => all || (sc.publishedRevision && !sc.archived)).map(sc => ({
+      id: sc.id, name: sc.name, category: sc.category || null, description: sc.description || null, domainId: sc.domainId || null,
+      publishedRevision: sc.publishedRevision || null, latestRevision: sc.latestRevision || null, archived: !!sc.archived,
+      actions: registered.filter(a => a.rpa.sceneId === sc.id).map(a => ({ id: a.id, name: a.name, revision: a.rpa.revision, enabled: a.enabled !== false, needsReview: !!sc.publishedRevision && sc.publishedRevision !== a.rpa.revision }))
+    })), { roles });
+  });
+  // 一個場景的契約：發布版本（或 ?revision=n）的入參、出參、登入角色、期限；按 §5 檢查；生成 Action 草稿（?objectKind=）
+  r.get('/pipelines/:id/scenes/:sceneId', owner, async (req, res) => {
+    const p = rpaPipeline(req.params.id);
+    const client = clientOf(p);
+    const scene = await rpaCall(() => client.scene(req.params.sceneId));
+    const number = Number(req.query.revision) || scene.publishedRevision;
+    const roles = await client.roles().then(x => listOf(x, 'roles')).catch(() => null);
+    const registered = [...S().actions.values()].filter(a => a.pipelineId === p.id && a.rpa?.sceneId === scene.id);
+    if (!number) return ok(res, { scene, revision: null, contract: null, conformance: [{ rule: 'R2', level: 'error', text: '沒有發布的版本，不能註冊' }], draft: null, actions: registered });
+    const { revision, contract } = await rpaCall(() => client.contract(scene.id, number));
+    const { files, ...revisionMeta } = revision;
+    ok(res, {
+      scene: { ...scene, revisions: undefined },
+      revision: revisionMeta,
+      scenario: req.query.source === '1' ? files?.['scenario.yaml'] ?? null : undefined,
+      contract,
+      conformance: conformance(scene, contract, roles),
+      draft: draftAction({ pipelineId: p.id, scene, revision, contract, objectKind: req.query.objectKind || null }),
+      actions: registered
+    });
+  });
+  // 預覽：用一個客體（或一個定位字串）算出定位分組、提交給 RPA 的入參與守衛期望值，不派發運行
+  r.post('/actions/:id/preview', owner, async (req, res) => {
+    const { action, pipeline } = rpaAction(req.params.id);
+    const object = req.body?.objectId ? S().getObject(req.body.objectId) : { id: null, name: null, locator: String(req.body?.locator || '') };
+    const out = { objectId: object.id, locator: object.locator, groups: null, inputs: null, expect: null, problems: [], warnings: [] };
+    if (object.id) {
+      if (!(object.actionIds || []).includes(action.id)) out.warnings.push(`Action ${action.id} 還沒有掛在客體 ${object.id} 上`);
+      if (action.objectKinds?.length && !action.objectKinds.includes(object.kind)) out.warnings.push(`客體種類 ${object.kind || '未標'} 不在 Action 適用的 ${action.objectKinds.join('、')} 內`);
+    }
+    try {
+      out.groups = parseLocator(action, object.locator);
+    } catch (err) {
+      out.problems.push({ name: 'locator', code: err.code, message: err.message });
+      return ok(res, out);
+    }
+    const contract = await ctx.executions.contractFor(pipeline, action).then(x => x.contract).catch(err => { out.warnings.push(`讀不到場景契約，未按場景宣告檢查：${err.message}`); return null; });
+    const rendered = renderSceneInputs(action, { object, groups: out.groups }, contract);
+    out.inputs = rendered.inputs;
+    out.problems.push(...rendered.problems);
+    out.expect = (action.check?.expect || []).map(e => (e.nonEmpty ? { output: e.output, nonEmpty: true } : { output: e.output, equals: renderValue(e.equals, { locator: out.groups, object }) }));
+    ok(res, out);
+  });
+  // 審閱新版本：負責人確認只讀後，把 Action 鎖到場景目前的發布版本（或指定版本）
+  r.post('/actions/:id/review', owner, async (req, res) => {
+    const { action, pipeline } = rpaAction(req.params.id);
+    if (req.body?.readOnly !== true) throw new HttpError(400, '審閱需要確認場景只讀、沒有業務副作用（readOnly: true）', 'review_required');
+    const client = clientOf(pipeline);
+    const scene = await rpaCall(() => client.scene(action.rpa.sceneId));
+    const number = Number(req.body?.revision) || scene.publishedRevision;
+    if (!number) throw new HttpError(409, `場景 ${scene.id} 沒有發布的版本`, 'not_published');
+    if (number !== scene.publishedRevision) throw new HttpError(409, `只能審閱目前的發布版本 v${scene.publishedRevision}`, 'revision_not_published');
+    const { revision, contract } = await rpaCall(() => client.contract(scene.id, number));
+    const mapped = Object.keys(action.rpa.inputs || {});
+    const drift = [
+      ...mapped.filter(n => !(n in contract.inputs)).map(n => `場景 v${number} 沒有入參 ${n}；請修改 rpa.inputs`),
+      ...Object.entries(contract.inputs).filter(([n, sp]) => !mapped.includes(n) && sp.default === undefined).map(([n]) => `場景 v${number} 的入參 ${n} 沒有映射，也沒有預設值；請修改 rpa.inputs`)
+    ];
+    const input = { ...action, rpa: { ...action.rpa, revision: number, contentHash: revision.contentHash, loginRole: contract.loginRole }, review: { readOnly: true }, enabled: req.body?.enabled ?? action.enabled };
+    const out = await S().tx(req.principal, `[動力層] 審閱 Action ${action.id}：${scene.id} v${action.rpa.revision} → v${number}`, t => {
+      drift.forEach(w => t.warn(w));
+      return S().upsertAction(t, input, req.principal);
+    });
+    txOut(res, out);
+  });
+  // 試運行：用一個客體走完整執行流程，但不寫回有效性
+  r.post('/actions/:id/trial', owner, async (req, res) => {
+    const { action } = rpaAction(req.params.id);
+    const object = S().getObject(req.body?.objectId);
+    const { execution } = ctx.executions.start({ ref: null, action, object, principal: req.principal, dryRun: true });
+    ok(res, { executionId: execution.id, state: execution.state, statusUrl: `/api/v1/action-executions/${execution.id}`, execution: executionView(execution) }, {}, 202);
+  });
   r.post('/actions', owner, async (req, res) => {
     const out = await S().tx(req.principal, a => `[動力層] Action ${a.id} ${a.name}（${a.kind}）`, t => S().upsertAction(t, req.body || {}, req.principal));
     txOut(res, out, 201);

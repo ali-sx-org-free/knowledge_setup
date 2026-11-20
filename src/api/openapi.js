@@ -27,7 +27,10 @@ const ENDPOINTS = [
   E('post', '/relations', '新增關係', 'contributor', { tag: '生產', body: { from: 'string', type: 'string', to: 'string', evidence: '{objectIds,sourceRef}', level: 'L1|L2|E1' } }),
   E('post', '/batch', '批量提交（單個 Git 提交，失敗整批回滾）', 'contributor', { tag: '生產', body: { message: 'string', items: '[{op, ref?, data}]' } }),
   E('post', '/items/{id}/evidence', '補充證據 L2 → L1', 'contributor', { tag: '生產', body: { objectIds: 'string[]', sourceRef: 'string', actionId: 'string' } }),
-  E('post', '/validate/{id}', '執行校驗 Action 並寫回有效性', 'contributor', { tag: '生產', body: { actionId: 'string' } }),
+  E('post', '/validate/{id}', '執行校驗 Action 並寫回有效性；RPA 管道的 Action 返回 202 與執行 ID，異步執行', 'contributor', { tag: '生產', body: { actionId: 'string' } }),
+  E('get', '/action-executions', 'RPA 校驗的執行記錄', 'contributor', { tag: '生產', query: ['itemId', 'actionId', 'state', 'runId', 'pipelineId', 'limit'] }),
+  E('get', '/action-executions/{id}', '一次執行的狀態、結論、證據與寫回效果（輪詢到 terminal 為 true）', 'contributor', { tag: '生產' }),
+  E('post', '/action-executions/{id}/refresh', '已逾時的執行：重新讀取原運行', 'contributor', { tag: '生產' }),
   E('post', '/conflicts', '登記衝突（雙方降為 L1）', 'contributor', { tag: '治理', body: { a: 'string', b: 'string', note: 'string' } }),
   E('get', '/conflicts', '衝突列表', 'contributor', { tag: '治理' }),
   E('get', '/feedback', '反饋列表', 'contributor', { tag: '治理' }),
@@ -39,7 +42,13 @@ const ENDPOINTS = [
   E('post', '/conflicts/{id}/resolve', '裁決衝突', 'owner', { tag: '負責人', body: { winner: 'string', reason: 'string' } }),
   E('post', '/validate-all', '對全部可校驗知識執行校驗', 'owner', { tag: '負責人', body: { onlyPending: 'boolean' } }),
   E('post', '/pipelines', '新增管道', 'owner', { tag: '動力層' }),
-  E('post', '/actions', '新增 Action', 'owner', { tag: '動力層' })
+  E('post', '/actions', '新增 Action', 'owner', { tag: '動力層' }),
+  E('post', '/pipelines/{id}/test', '測試管道；RPA 管道另做最小權限體檢', 'owner', { tag: '動力層' }),
+  E('get', '/pipelines/{id}/scenes', 'RPA 場景目錄（已發布、未歸檔；?all=1 全部）', 'owner', { tag: '動力層', query: ['q', 'domain', 'category', 'all'] }),
+  E('get', '/pipelines/{id}/scenes/{sceneId}', 'RPA 場景契約、可註冊規範檢查與 Action 草稿', 'owner', { tag: '動力層', query: ['revision', 'objectKind', 'source'] }),
+  E('post', '/actions/{id}/preview', 'RPA Action 預覽：定位分組、RPA 入參與守衛期望值（不派發）', 'owner', { tag: '動力層', body: { objectId: 'string', locator: 'string' } }),
+  E('post', '/actions/{id}/review', 'RPA Action 審閱新發布版本並鎖定', 'owner', { tag: '動力層', body: { readOnly: 'boolean', revision: 'integer' } }),
+  E('post', '/actions/{id}/trial', 'RPA Action 試運行（走完整流程，不寫回）', 'owner', { tag: '動力層', body: { objectId: 'string' } })
 ];
 
 function schemaFor(spec) {
@@ -66,7 +75,7 @@ export function buildOpenApi(baseUrl) {
       description: `所需角色：${e.role}`,
       parameters: params.length ? params : undefined,
       requestBody: e.body ? { required: true, content: { 'application/json': { schema: schemaFor(e.body) } } } : undefined,
-      responses: { 200: { description: '成功：{ data, commit?, warnings? }' }, 400: { description: '輸入錯誤' }, 401: { description: '未認證' }, 403: { description: '權限不足' }, 422: { description: '違反知識規則' } },
+      responses: { 200: { description: '成功：{ data, commit?, warnings? }' }, 202: { description: '已受理，異步執行：{ data: { executionId, state, statusUrl } }' }, 400: { description: '輸入錯誤' }, 401: { description: '未認證' }, 403: { description: '權限不足' }, 422: { description: '違反知識規則' } },
       security: e.role === 'public' ? [] : undefined
     };
     (paths[e.path] ||= {})[e.method] = op;

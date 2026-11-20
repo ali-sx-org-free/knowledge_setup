@@ -88,7 +88,7 @@ ${table(['方法', '路徑', '用途'], [
   ['POST', '/relations', '新增關係 {from, type, to, evidence?}'],
   ['POST', '/batch', '批量提交（單次提交，推薦）'],
   ['POST', '/items/{id}/evidence', '補充證據 L2 → L1'],
-  ['POST', '/validate/{id}', '用校驗 Action 驗證（通過 → L0，不符 → L1，客體不存在 → 下線）'],
+  ['POST', '/validate/{id}', '用校驗 Action 驗證（通過 → L0，不符 → L1，客體不存在 → 下線）。RPA 管道的 Action 返回 202 和 executionId：用 GET /action-executions/{executionId} 輪詢到 terminal 為 true；只有 verdict 為 pass 才會寫回，「無法判定」不改有效性'],
   ['POST', '/conflicts', '登記衝突 {a, b, note}：雙方降為 L1 並通知負責人'],
   ['POST', '/feedback', '反饋知識有誤 {targetId, comment}'],
   ['GET', '/gaps', '知識缺口（智能體回答「未收錄」的問題），可據此補充知識'],
