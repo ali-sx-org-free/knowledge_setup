@@ -441,6 +441,8 @@ test('gitWebUrl：GitHub、GitLab 給出網頁地址，其他遠端與帶憑證�
   assert.equal(gitWebUrl('git@github.com:acme/kb.git', 'main', 'knowledge/docs/庫存/DOC-0001-x.md'), `https://github.com/acme/kb/blob/main/knowledge/docs/${encodeURIComponent('庫存')}/DOC-0001-x.md`);
   assert.equal(gitWebUrl('https://gitlab.com/acme/kb.git', 'dev', 'a/b.md'), 'https://gitlab.com/acme/kb/-/blob/dev/a/b.md');
   assert.equal(gitWebUrl('https://user:tok@github.com/acme/kb.git', 'main', 'a.md'), 'https://github.com/acme/kb/blob/main/a.md');
+  assert.equal(gitWebUrl('ssh://git@ssh.github.com:443/acme/kb.git', 'main', 'a.md'), 'https://github.com/acme/kb/blob/main/a.md');
+  assert.equal(gitWebUrl('ssh://git@altssh.gitlab.com:443/acme/kb.git', 'main', 'a.md'), 'https://gitlab.com/acme/kb/-/blob/main/a.md');
   assert.equal(gitWebUrl('https://git.example.com/acme/kb.git', 'main', 'a.md'), null);
   assert.equal(gitWebUrl('', 'main', 'a.md'), null);
   assert.equal(gitWebUrl('file:///tmp/repo', 'main', 'a.md'), null);

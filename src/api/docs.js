@@ -26,6 +26,9 @@ export function gitWebUrl(remote, branch, file) {
     } catch { return null; }
   }
   if (!host || !repo || !/^[\w.-]+(\/[\w.-]+)+$/.test(repo)) return null;
+  // 只開放 443 端口時用的 SSH 主機，網頁在主站
+  if (/^ssh\.github\.com$/i.test(host)) host = 'github.com';
+  else if (/^altssh\.gitlab\.com$/i.test(host)) host = 'gitlab.com';
   const encPath = file.split('/').map(encodeURIComponent).join('/');
   const ref = encodeURIComponent(branch || 'main');
   if (/(^|\.)github\./i.test(host) || /^github\.com$/i.test(host)) return `https://${host}/${repo}/blob/${ref}/${encPath}`;
