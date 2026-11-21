@@ -13,6 +13,8 @@ import {
 } from './validity.js';
 import { tr, tk } from '../i18n/index.js';
 import { normalizeRpaBaseUrl, normalizePipelineRpa, normalizeRpaAction, actionHash } from './rpa.js';
+import { DocLibrary, DOCS_README } from './docs.js';
+import { BUILTIN_TEMPLATES } from './doc-templates.js';
 
 const DIRS = {
   subject: 'subjects',
@@ -22,9 +24,10 @@ const DIRS = {
   pipeline: 'pipelines',
   conflict: 'governance/conflicts',
   feedback: 'governance/feedback',
-  gap: 'governance/gaps'
+  gap: 'governance/gaps',
+  template: 'doc-templates'
 };
-const COLLECTION = { subject: 'subjects', object: 'objects', relation: 'relations', action: 'actions', pipeline: 'pipelines', conflict: 'conflicts', feedback: 'feedback', gap: 'gaps' };
+const COLLECTION = { subject: 'subjects', object: 'objects', relation: 'relations', action: 'actions', pipeline: 'pipelines', conflict: 'conflicts', feedback: 'feedback', gap: 'gaps', template: 'docTemplates' };
 
 const nowIso = () => new Date().toISOString();
 const clean = v => (typeof v === 'string' ? v.trim() : v);
@@ -69,6 +72,7 @@ export class KnowledgeStore {
     this.lazyDirty = new Set();
     this.pushTimer = null;
     this.pushing = Promise.resolve();
+    this.docs = new DocLibrary(this);
     this.resetMemory();
   }
 
@@ -84,6 +88,7 @@ export class KnowledgeStore {
     this.config = { domains: DEFAULT_DOMAINS, expiryDays: structuredClone(DEFAULT_EXPIRY_DAYS), highFrequencyRatio: 0.2, validationIntervalHours: 24 };
     this.usage = { subjects: {} };
     this.loadErrors = [];
+    this.docs?.reset();
   }
 
   // ---------------------------------------------------------------- 載入與持久化
@@ -104,6 +109,16 @@ export class KnowledgeStore {
     try { await fs.access(configFile); } catch { await fs.writeFile(configFile, YAML.stringify(this.config, { lineWidth: 0 })); created = true; }
     if (created) {
       const hash = await this.repo.commit('初始化知識倉庫結構', { paths: [this.subdir] });
+      if (hash && this.autoPush) this.schedulePush();
+    }
+    // 文檔庫：倉庫裡還沒有模板目錄時寫入 6 個內置模板、docs/README.md 與「通用」文件夾（一次提交）
+    let templatesDir = true;
+    try { await fs.access(path.join(this.root, DIRS.template)); } catch { templatesDir = false; }
+    if (!templatesDir) {
+      for (const tpl of BUILTIN_TEMPLATES) await this.writeFileRel(this.fileOf('template', tpl.id), this.serialize('template', tpl));
+      try { await fs.access(path.join(this.root, 'docs', 'README.md')); } catch { await this.writeFileRel('docs/README.md', DOCS_README); }
+      try { await fs.access(path.join(this.root, 'docs', '通用')); } catch { await this.writeFileRel('docs/通用/_folder.yaml', YAML.stringify({ description: '不屬於特定領域的文檔：指南、規範、跨域說明' }, { lineWidth: 0 })); }
+      const hash = await this.repo.commit('初始化文檔模板', { paths: [this.subdir] });
       if (hash && this.autoPush) this.schedulePush();
     }
     await this.load();
@@ -168,6 +183,7 @@ export class KnowledgeStore {
         }
       }
     }
+    await this.docs.load();
   }
 
   bumpCounter(id) {
@@ -202,6 +218,18 @@ export class KnowledgeStore {
     await fs.writeFile(full, content);
   }
 
+  /** 刪除倉庫內的檔案，並清掉因此變空的上層目錄（不越過 docs/）。 */
+  async removeFileRel(rel) {
+    const full = path.join(this.root, rel);
+    await fs.rm(full, { force: true });
+    let dir = path.dirname(full);
+    const stop = path.join(this.root, 'docs');
+    while (dir.startsWith(stop + path.sep)) {
+      try { await fs.rmdir(dir); } catch { break; }
+      dir = path.dirname(dir);
+    }
+  }
+
   async persist(t) {
     for (const key of t.touched) {
       const [kind, id] = key.split(':');
@@ -212,6 +240,9 @@ export class KnowledgeStore {
       const [kind, id] = key.split(':');
       await fs.rm(path.join(this.root, this.fileOf(kind, id)), { force: true });
     }
+    // 文檔庫的動態路徑：先寫後刪（同一事務內的移動在一次提交中完成，Git 識別為重命名）
+    for (const [rel, content] of t.rawWrites) await this.writeFileRel(rel, content);
+    for (const rel of t.rawRemoves) await this.removeFileRel(rel);
     if (t.configChanged) await this.writeFileRel('config.yaml', YAML.stringify(this.config, { lineWidth: 0 }));
     await this.writeLazy();
   }
@@ -239,8 +270,12 @@ export class KnowledgeStore {
         removed: new Set(),
         warnings: [],
         configChanged: false,
+        rawWrites: new Map(),
+        rawRemoves: new Set(),
         touch: (kind, id) => t.touched.add(`${kind}:${id}`),
         remove: (kind, id) => { t.removed.add(`${kind}:${id}`); t.touched.delete(`${kind}:${id}`); },
+        writeRaw: (rel, content) => { t.rawWrites.set(rel, content); t.rawRemoves.delete(rel); },
+        removeRaw: rel => { t.rawRemoves.add(rel); t.rawWrites.delete(rel); },
         warn: w => t.warnings.push(w)
       };
       let result;
@@ -481,6 +516,7 @@ export class KnowledgeStore {
         incoming: [...this.relations.values()].filter(r => r.to === s.id && r.type !== '別名').map(rel)
       },
       actions,
+      documents: this.docs.documentsFor(s.id),
       dynamicValueNote: actions.some(a => a.kind === '取值') ? tr('動態值不作為知識存儲；回答數量、狀態等動態值時必須調用取值 Action') : null,
       levels: LEVEL_INFO
     };
@@ -722,6 +758,7 @@ export class KnowledgeStore {
     this.assertCanContribute(principal);
     const o = this.getObject(id);
     const locatorChanged = patch.locator !== undefined && (clean(patch.locator) || null) !== o.locator;
+    if (o.docId && (locatorChanged || (patch.status !== undefined && patch.status !== o.status))) throw new RuleError(tr('客體 {id} 由文檔庫管理（文檔 {doc}）：定位和狀態請在文檔上操作（發布、廢止）', { id: o.id, doc: o.docId }), 409, 'object_managed_by_doc');
     for (const k of ['name', 'kind', 'locator', 'description']) if (patch[k] !== undefined) o[k] = clean(patch[k]) || null;
     if (locatorChanged) {
       const by = sourceOf(principal).id;
@@ -773,7 +810,8 @@ export class KnowledgeStore {
 
   deleteObject(t, id, principal) {
     if (!principal?.isAdmin) throw new RuleError(tr('只有管理員可以刪除客體（正常情況請標記下線）'), 403, 'forbidden');
-    this.getObject(id);
+    const o = this.getObject(id);
+    if (o.docId && this.docs.has(o.docId)) throw new RuleError(tr('客體 {id} 由文檔庫管理（文檔 {doc}）：定位和狀態請在文檔上操作（發布、廢止）', { id: o.id, doc: o.docId }), 409, 'object_managed_by_doc');
     if (this.bindingsOfObject(id).length) throw new RuleError(tr('客體仍被綁定，不能刪除；請改為標記下線'), 409, 'in_use');
     this.objects.delete(id);
     t.remove('object', id);
@@ -1294,6 +1332,7 @@ export class KnowledgeStore {
       windowDays,
       totals: { subjects: canonical.length, aliases: this.subjects.size - canonical.length, objects: this.objects.size, relations: this.relations.size, assertions: canonical.reduce((n, s) => n + s.assertions.length, 0), actions: this.actions.size, pipelines: this.pipelines.size, openConflicts: [...this.conflicts.values()].filter(c => c.status === 'open').length, openFeedback: fb.filter(f => f.status === 'open').length },
       levels: this.levelDistribution(),
+      documents: this.docs.health(),
       topSubjects: used.slice(0, 10).map(x => ({ ...this.subjectSummary(x.s), usage: x.count, hasL0: hasL0(x.s) }))
     };
   }
@@ -1312,6 +1351,8 @@ const KNOWLEDGE_README = `# 私有領域知識庫
 | \`actions/ACT-*.yaml\` | Action（校驗 / 取值，只讀） |
 | \`pipelines/P-*.yaml\` | 管道（數據源連接；憑證以 \`\${env:變數}\` 引用，不入庫） |
 | \`governance/\` | 衝突、反饋、知識缺口 |
+| \`docs/\` | 文檔庫：文件夾就是目錄，已發布文檔 \`DOC-*.md\`，草稿在 \`docs/_drafts/\`（見 \`docs/README.md\`） |
+| \`doc-templates/TPL-*.yaml\` | 文檔模板：欄位、章節、審閱與複審規則 |
 | \`stats/usage.yaml\` | 主體被使用次數（用於重驗優先級與 L0 覆蓋率） |
 
 有效性層級：L0 可靠 / L1 參考 / L2 探索 / E1 失效。人或智能體提交的知識最高 L1；

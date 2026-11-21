@@ -5,6 +5,7 @@ import {
   setUnauthorizedHandler, level, pill, vpill, tag, idLink, fmtTime, ago, pct, panel, table, formData, field, input, select, textarea, markdown, LEVEL_TEXT
 } from './core.js';
 import { renderGraph, legend } from './graph.js';
+import { registerDocPages, subjectDocsPanel, objectDocsHtml, docsDashboardPanel, docNoteHtml } from './docs.js';
 import { t, tk, tv, td, locale, initI18n, setLocale, localeSelect } from './i18n.js';
 
 await initI18n();
@@ -22,6 +23,11 @@ const NAV = {
       { id: 'assertions', name: t('nav|斷言'), aliases: ['item'], icon: 'list', desc: t('關於主體的具體陳述；一條只說一件事，單獨驗證、單獨失效。') },
       { id: 'objects', name: t('nav|客體'), aliases: ['object'], desc: t('主體在真實世界中的對應物，也是有效性的證據來源。') },
       { id: 'relations', name: t('nav|關係'), icon: 'node', desc: t('10 種關係類型的閉集；邊直接帶有效性。') }
+    ] },
+    { id: 'documents', name: t('文檔庫'), en: 'DOCUMENTS', icon: 'doc', pages: [
+      { id: 'docs', name: t('文檔'), aliases: ['doc', 'doc-edit'], desc: t('知識倉庫中的 Markdown 文檔。文件夾就是 Git 目錄；內容走版本，整理即時生效。') },
+      { id: 'doc-templates', name: t('模板'), icon: 'grid', desc: t('知識文檔與管理文檔的模板：欄位、章節、誰能發布、多久複審。') },
+      { id: 'doc-tags', name: t('標籤'), icon: 'tag', desc: t('標籤字典：分組、顏色、使用數；重命名與合併會改寫所有用到它的文檔。') }
     ] },
     { id: 'graph', name: t('圖譜'), en: 'GRAPH', icon: 'node', pages: [
       { id: 'graph', name: t('知識圖譜'), desc: t('拖曳節點、滾輪縮放、拖曳空白處平移；點選節點查看主體。') },
@@ -203,6 +209,7 @@ document.addEventListener('click', async e => {
 
 // ------------------------------------------------------------------ 頁面
 const PAGES = {};
+registerDocPages(PAGES, { me: () => me, render: () => render(), title: NAV.title, schema: () => schema, subjectOptions: () => subjectOptions(true) });
 
 PAGES.dashboard = async () => {
   const o = await get('/admin/api/overview');
@@ -240,6 +247,7 @@ PAGES.dashboard = async () => {
         <dt>${t('狀態')}</dt><dd>${git.lastError ? `<span class="badge red">${t('同步異常')}</span> <span class="cell-sub">${esc(git.lastError)}</span>` : `<span class="badge green">${t('正常')}</span>`}${git.loadErrors?.length ? ` <span class="badge amber">${esc(t('{n} 個檔案無法解析', { n: git.loadErrors.length }))}</span>` : ''}</dd>
         <dt>${t('自然語言')}</dt><dd>${o.llm.enabled ? `OpenRouter · ${esc(o.llm.model)}` : t('未配置（使用規則模板）')}</dd>
       </dl></div>`, me.isAdmin ? `<a class="text-btn" href="#repo">${t('設定')}</a>` : '')}
+      ${docsDashboardPanel(h.documents)}
       ${panel(t('知識規模'), `<div class="panel-body"><dl class="kv">${[[t('規範主體'), h.totals.subjects], [t('nav|別名'), h.totals.aliases], [t('nav|斷言'), h.totals.assertions], [t('nav|客體'), h.totals.objects], [t('nav|關係'), h.totals.relations], [t('Action / 管道'), `${h.totals.actions} / ${h.totals.pipelines}`], [t('未裁決衝突'), h.totals.openConflicts], [t('未處理反饋'), h.totals.openFeedback]].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('')}</dl></div>`)}
       ${panel(t('最近提交'), `<div class="panel-body"><ul class="timeline">${o.log.map(l => `<li><strong>${esc(l.subject)}</strong><span class="cell-sub">${esc(td(l.author))} · ${ago(l.date)} · <span class="mono">${esc(l.hash)}</span></span></li>`).join('') || `<li>${t('尚無提交')}</li>`}</ul></div>`, `<a class="text-btn" href="#changes">${t('全部')}</a>`)}
     </div>
@@ -249,7 +257,10 @@ PAGES.dashboard = async () => {
 
 PAGES.changes = async () => {
   const log = await get('/admin/api/log?limit=150');
-  content().innerHTML = panel(t('提交記錄（{n}）', { n: log.length }), table([t('commit|提交'), t('作者'), t('時間'), t('說明')], log.map(l => `<tr><td class="mono">${esc(l.hash)}</td><td>${esc(td(l.author))}<span class="cell-sub">${esc(l.email)}</span></td><td>${fmtTime(l.date)}</td><td class="wrap">${esc(l.subject)}</td></tr>`), t('尚無提交')));
+  const isDoc = l => /^\[文檔\]/.test(l.subject || '');
+  const rows = filter => log.filter(l => (filter === 'docs' ? isDoc(l) : filter === 'knowledge' ? !isDoc(l) : true)).map(l => `<tr><td class="mono">${esc(l.hash)}</td><td>${esc(td(l.author))}<span class="cell-sub">${esc(l.email)}</span></td><td>${fmtTime(l.date)}</td><td class="wrap">${esc(l.subject)}</td></tr>`);
+  content().innerHTML = panel(t('提交記錄（{n}）', { n: log.length }), `<div class="toolbar"><label>${t('顯示')} ${select('filter', [['', t('全部')], ['docs', t('只看文檔')], ['knowledge', t('不含文檔')]], '', 'id="f-commits"')}</label></div><div id="commit-table">${table([t('commit|提交'), t('作者'), t('時間'), t('說明')], rows(''), t('尚無提交'))}</div>`);
+  $('#f-commits').onchange = e => ($('#commit-table').innerHTML = table([t('commit|提交'), t('作者'), t('時間'), t('說明')], rows(e.target.value), t('尚無提交')));
 };
 
 PAGES.subjects = async () => {
@@ -321,6 +332,7 @@ PAGES.subject = async ({ param: id }) => {
       ${panel(t('斷言（{n}）', { n: card.assertions.length }), table(['ID', t('類型'), t('內容'), t('層級'), t('證據'), t('操作')], assertionRows, t('尚無斷言。約束類斷言（否定性知識、邊界情況）最容易被智能體用常識補錯，建議優先收集。')))}
       ${panel(t('客體綁定（{n}）', { n: card.bindings.length }), table(['ID', t('客體'), t('狀態'), t('層級'), t('驗證'), t('操作')], bindingRows, t('尚無客體綁定：綜合層級為 L2')), `<span class="muted" style="font-size:11px">${t('綜合層級 = 有效綁定中的最高層級')}</span>`)}
       ${panel(t('關係（{n}）', { n: card.relations.outgoing.length + card.relations.incoming.length }), table(['ID', t('起點'), t('關係'), t('終點'), t('層級'), t('操作')], [...card.relations.outgoing.map(r => relRow(r, 'out')), ...card.relations.incoming.map(r => relRow(r, 'in'))], t('尚無關係')))}
+      ${subjectDocsPanel(s, card.documents || [])}
     </div><div class="stack">
       ${panel(t('主體資訊'), `<div class="panel-body"><dl class="kv"><dt>ID</dt><dd>${tag(s.id)}</dd><dt>${t('類型 / 領域')}</dt><dd>${esc(tv(s.type))} · ${esc(s.domain)}</dd><dt>${t('綜合層級')}</dt><dd>${level(s.level)}<span class="cell-sub">${esc(s.levelNote)}</span></dd><dt>${t('負責人')}</dt><dd>${esc(s.owner || '—')}</dd><dt>${t('出錯代價')}</dt><dd>${s.errorCost} / 5</dd><dt>${t('別名')}</dt><dd>${card.aliases.map(a => `${idLink(a.id, a.name)}${a.ambiguous ? ` <span class="badge amber">${t('多義')}</span>` : ''}`).join(' ') || '—'}</dd><dt>${t('更新')}</dt><dd>${fmtTime(s.updatedAt)}</dd></dl></div>`)}
       ${panel(t('可用 Action'), `<div class="panel-body stack-sm">${actionLibrary(card.actions) || `<p class="muted">${t('綁定的客體沒有配置 Action。')}</p>`}${card.dynamicValueNote ? `<p class="notice">${esc(card.dynamicValueNote)}</p>` : ''}</div>`)}
@@ -412,7 +424,7 @@ PAGES.item = async ({ param: id }) => {
       ${v.level === 'E1' ? `<dt>${t('失效原因')}</dt><dd>${esc(td(v.invalidReason) || '—')}</dd><dt>${t('替代者')}</dt><dd>${v.replacedBy ? idLink(v.replacedBy) : '—'}</dd>` : ''}
     </dl></div>`)}
     ${panel(t('操作'), `<div class="panel-body">${rowOps(id, v.level, { full: true })}<p class="muted" style="margin-top:8px;font-size:12px">${t('上行只有兩條路：補充證據（L2 → L1），以及校驗或確認（L1 → L0）。智能體不能晉升知識。')}</p></div>`)}
-  </div><div class="stack">${panel(t('層級歷史'), `<div class="panel-body"><ul class="timeline">${[...(v.history || [])].reverse().map(h => `<li><strong>${esc(h.from || t('新建'))} → ${esc(h.to)}</strong> ${esc(td(h.reason) || '')}<span class="cell-sub">${esc(h.by || '')} · ${fmtTime(h.at)}${h.note ? ' · ' + esc(td(h.note)) : ''}</span></li>`).join('') || `<li>${t('無')}</li>`}</ul></div>`)}<div id="item-execs"></div></div></div>`;
+  </div><div class="stack">${panel(t('層級歷史'), `<div class="panel-body"><ul class="timeline">${[...(v.history || [])].reverse().map(h => `<li><strong>${esc(h.from || t('新建'))} → ${esc(h.to)}</strong> ${esc(td(h.reason) || '')}<span class="cell-sub">${esc(h.by || '')} · ${fmtTime(h.at)}${h.note ? ' · ' + docNoteHtml(h.note) : ''}</span></li>`).join('') || `<li>${t('無')}</li>`}</ul></div>`)}<div id="item-execs"></div></div></div>`;
   get(`/api/v1/action-executions?${qs({ itemId: id, limit: 10 })}`).then(list => {
     if (list.length) $('#item-execs').innerHTML = panel(t('RPA 執行記錄'), executionTable(list, { item: false }));
   }).catch(() => {});
@@ -439,7 +451,7 @@ PAGES.objects = async () => {
   const load = async () => {
     const list = await get('/api/v1/objects?' + qs({ q: $('#f-q').value, category: $('#f-cat').value, status: $('#f-status').value }));
     $('#f-count').textContent = t('{n} 個客體', { n: list.length });
-    $('#o-table').innerHTML = table(['ID', t('名稱'), t('類別 / 種類'), t('定位'), t('可用 Action'), t('狀態'), t('綁定主體'), t('操作')], list.map(o => `<tr><td>${idLink(o.id)}</td><td class="wrap"><a href="#object/${esc(o.id)}">${esc(o.name)}</a></td><td>${esc(tv(o.category))}<span class="cell-sub">${esc(tv(o.kind) || '')}</span></td><td class="mono wrap">${esc(o.locator || '—')}</td><td>${(o.actionIds || []).map(tag).join(' ') || '—'}</td><td>${statusPill(o.status)}</td><td class="wrap">${o.boundSubjects.map(s => `${idLink(s.id, s.name)}`).join(' ') || '—'}</td><td>${o.status !== '下線' ? `<button class="text-btn" data-op="offline" data-id="${esc(o.id)}">${t('標記下線')}</button>` : ''}</td></tr>`));
+    $('#o-table').innerHTML = table(['ID', t('名稱'), t('類別 / 種類'), t('定位'), t('可用 Action'), t('狀態'), t('綁定主體'), t('操作')], list.map(o => `<tr><td>${idLink(o.id)}</td><td class="wrap"><a href="#object/${esc(o.id)}">${esc(o.name)}</a></td><td>${esc(tv(o.category))}<span class="cell-sub">${esc(tv(o.kind) || '')}</span></td><td class="mono wrap">${esc(o.locator || '—')}</td><td>${(o.actionIds || []).map(tag).join(' ') || '—'}</td><td>${statusPill(o.status)}</td><td class="wrap">${o.boundSubjects.map(s => `${idLink(s.id, s.name)}`).join(' ') || '—'}</td><td>${o.docId ? `<a class="text-btn" href="#doc/${esc(o.docId)}">${t('由文檔庫管理')}</a>` : o.status !== '下線' ? `<button class="text-btn" data-op="offline" data-id="${esc(o.id)}">${t('標記下線')}</button>` : ''}</td></tr>`));
   };
   let timer;
   $('#f-q').oninput = () => { clearTimeout(timer); timer = setTimeout(load, 200); };
@@ -457,9 +469,10 @@ PAGES.objects = async () => {
 PAGES.object = async ({ param: id }) => {
   const o = await get(`/api/v1/objects/${id}`);
   setHeading(o.name, `${tv(o.category)} · ${tv(o.kind) || ''}`, `${t('知識庫')} › ${t('客體')} › ${o.id}`);
-  setActions(`${o.status !== '下線' ? `<button class="button danger" data-op="offline" data-id="${esc(o.id)}">${t('標記下線')}</button>` : ''}<button class="button" id="edit-actions">${t('設定可用 Action')}</button>`);
-  content().innerHTML = `<div class="two-col"><div class="stack">${panel(t('客體資訊'), `<div class="panel-body"><dl class="kv"><dt>ID</dt><dd>${tag(o.id)}</dd><dt>${t('類別 / 種類')}</dt><dd>${esc(tv(o.category))} · ${esc(tv(o.kind) || '—')}</dd><dt>${t('定位')}</dt><dd class="mono">${esc(o.locator || '—')}</dd><dt>${t('狀態')}</dt><dd>${o.status === '下線' ? `${statusPill('下線')} ${esc(td(o.offlineReason) || '')} ${fmtTime(o.offlineAt)}` : statusPill('在用')}</dd><dt>${t('說明')}</dt><dd>${esc(o.description || '—')}</dd><dt>${t('登記者')}</dt><dd>${esc(o.createdBy?.name || '—')} · ${fmtTime(o.createdAt)}</dd></dl></div>`)}
-    ${panel(t('綁定的主體'), table([t('主體'), t('綁定'), t('層級')], o.boundSubjects.map(s => `<tr><td>${idLink(s.id)} ${esc(s.name)}</td><td>${idLink(s.bindingId)}</td><td>${level(s.bindingLevel)}</td></tr>`), t('尚未綁定')))}</div>
+  setActions(`${o.status !== '下線' && !o.managedBy ? `<button class="button danger" data-op="offline" data-id="${esc(o.id)}">${t('標記下線')}</button>` : ''}${o.managedBy ? `<a class="button" href="#doc/${esc(o.managedBy.id)}">${t('打開文檔')}</a>` : ''}<button class="button" id="edit-actions">${t('設定可用 Action')}</button>`);
+  const od = objectDocsHtml(o);
+  content().innerHTML = `${od.managed}<div class="two-col"><div class="stack">${panel(t('客體資訊'), `<div class="panel-body"><dl class="kv"><dt>ID</dt><dd>${tag(o.id)}</dd><dt>${t('類別 / 種類')}</dt><dd>${esc(tv(o.category))} · ${esc(tv(o.kind) || '—')}</dd><dt>${t('定位')}</dt><dd class="mono">${esc(o.locator || '—')}</dd><dt>${t('狀態')}</dt><dd>${o.status === '下線' ? `${statusPill('下線')} ${esc(td(o.offlineReason) || '')} ${fmtTime(o.offlineAt)}` : statusPill('在用')}</dd><dt>${t('說明')}</dt><dd>${esc(o.description || '—')}</dd><dt>${t('登記者')}</dt><dd>${esc(o.createdBy?.name || '—')} · ${fmtTime(o.createdAt)}</dd></dl></div>`)}
+    ${panel(t('綁定的主體'), table([t('主體'), t('綁定'), t('層級')], o.boundSubjects.map(s => `<tr><td>${idLink(s.id)} ${esc(s.name)}</td><td>${idLink(s.bindingId)}</td><td>${level(s.bindingLevel)}</td></tr>`), t('尚未綁定')))}${od.docs}</div>
     <div>${panel(t('可用 Action'), `<div class="panel-body stack-sm">${actionLibrary(o.actions) || `<p class="muted">${t('未配置')}</p>`}</div>`)}</div></div>`;
   $('#edit-actions').onclick = async () => {
     const actions = await get('/api/v1/actions');
@@ -536,7 +549,7 @@ PAGES.levels = async () => {
 PAGES.queue = async () => {
   const q = await get('/api/v1/queue');
   setActions(`${isOwner() ? `<button class="button" id="validate-pending">${t('對隊列執行校驗')}</button>` : ''}${me.isAdmin ? `<button class="button" id="run-expiry">${t('執行到期檢查')}</button>` : ''}`);
-  content().innerHTML = panel(t('待重驗（{n}）', { n: q.length }), table(['#' + t('優先級'), t('條目'), t('主體'), t('內容'), t('原因'), t('層級'), '#' + t('使用 × 代價'), t('操作')], q.map(x => `<tr><td class="numeric">${x.priority}</td><td>${idLink(x.id)}<span class="cell-sub">${esc(mapText(ITEM_KIND_SHORT, x.kind))}</span></td><td>${x.subject ? `${idLink(x.subject.id)} ${esc(x.subject.name)}` : '—'}</td><td class="wrap">${esc(x.summary)}</td><td>${pill(pendingLabel(x.pending), 'amber')}<span class="cell-sub">${esc(td(x.pending.note) || '')} ${ago(x.pending.at)}</span></td><td>${level(x.level)}</td><td class="numeric">${x.usage} × ${x.errorCost}</td><td>${rowOps(x.id, x.level)}</td></tr>`), t('沒有待重驗的知識')));
+  content().innerHTML = panel(t('待重驗（{n}）', { n: q.length }), table(['#' + t('優先級'), t('條目'), t('主體'), t('內容'), t('原因'), t('層級'), '#' + t('使用 × 代價'), t('操作')], q.map(x => `<tr><td class="numeric">${x.priority}</td><td>${idLink(x.id)}<span class="cell-sub">${esc(mapText(ITEM_KIND_SHORT, x.kind))}</span></td><td>${x.subject ? `${idLink(x.subject.id)} ${esc(x.subject.name)}` : '—'}</td><td class="wrap">${esc(x.summary)}</td><td>${pill(pendingLabel(x.pending), 'amber')}<span class="cell-sub">${docNoteHtml(x.pending.note)} ${ago(x.pending.at)}</span></td><td>${level(x.level)}</td><td class="numeric">${x.usage} × ${x.errorCost}</td><td>${rowOps(x.id, x.level)}</td></tr>`), t('沒有待重驗的知識')));
   $('#validate-pending')?.addEventListener('click', async () => { const r = await post('/api/v1/validate-all', { onlyPending: true }); toast(t('校驗 {total} 條：通過 {passed}，不符 {mismatched}，客體缺失 {missing}，失敗 {errors}', r.data), 6000); render(); });
   $('#run-expiry')?.addEventListener('click', async () => { const r = await post('/admin/api/maintenance/expiry'); toast(t('到期檢查完成：{n} 條降為 L1', { n: r.data.expired.length })); render(); });
 };

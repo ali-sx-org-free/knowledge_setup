@@ -239,6 +239,27 @@ export class GitRepo {
     });
   }
 
+  /**
+   * 一個檔案的提交歷史（跟隨重命名）：每個提交帶當時的路徑（相對倉庫根目錄）與變更類型。
+   * 返回 [{ hash, author, email, date, subject, path, from, change }]，最新的在前。
+   */
+  async logFile(file, { limit = 100, follow = true } = {}) {
+    if (!(await this.hasCommits())) return [];
+    const sep = '\x1f';
+    const rec = '\x1e';
+    const args = ['-c', 'core.quotepath=false', 'log', `-n${limit}`, `--pretty=format:${rec}%h${sep}%an${sep}%ae${sep}%aI${sep}%s`, '--name-status'];
+    if (follow) args.push('--follow');
+    args.push('--', file);
+    const out = await this.git(args).catch(() => '');
+    return out.split(rec).filter(x => x.trim()).map(chunk => {
+      const [head, ...rest] = chunk.split('\n');
+      const [hash, author, email, date, subject] = head.split(sep);
+      const st = rest.map(l => l.trim()).filter(Boolean).map(l => l.split('\t'))[0] || [];
+      const renamed = st.length >= 3;
+      return { hash, author, email, date, subject, change: (st[0] || '')[0] || null, path: renamed ? st[2] : st[1] || null, from: renamed ? st[1] : null };
+    });
+  }
+
   async head() {
     if (!(await this.hasCommits())) return null;
     return (await this.git(['rev-parse', '--short', 'HEAD'])).trim();

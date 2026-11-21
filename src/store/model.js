@@ -24,7 +24,7 @@ export const SUBJECT_TYPES = {
 
 export const OBJECT_CATEGORIES = {
   數字: { desc: '數據表與字段、API、消息主題、配置項、代碼模塊、監控指標', kinds: ['表字段', '數據表', 'API', '消息主題', '配置項', '代碼模塊', '監控指標'] },
-  制度: { desc: '設計文檔、SOP、口徑定義文檔、SLA、評審記錄', kinds: ['設計文檔', 'SOP', '口徑定義', 'SLA', '評審記錄'] },
+  制度: { desc: '設計文檔、SOP、口徑定義文檔、SLA、評審記錄', kinds: ['設計文檔', 'SOP', '口徑定義', 'SLA', '評審記錄', '知識文檔'] },
   物理: { desc: '倉庫、庫區、庫位、設備（MVP 只登記，不接管道）', kinds: ['倉庫', '庫區', '庫位', '設備'] }
 };
 
@@ -98,12 +98,22 @@ export const ID_PREFIX = {
   pipeline: 'P',
   conflict: 'C',
   feedback: 'F',
-  gap: 'G'
+  gap: 'G',
+  doc: 'DOC',
+  template: 'TPL'
 };
+
+// 文檔庫（見 docs/design/document-library.md）：狀態、修訂狀態、模板類別、欄位類型。枚舉值是 API 的值，保持繁體原文。
+export const DOC_STATUS = ['草稿', '待審', '已發布', '已廢止'];
+export const DOC_REVISION = ['修訂中', '修訂待審'];
+export const DOC_PURPOSE = { 知識: '人和智能體讀：解釋概念、說明設計、回答常見問題', 管理: '要遵守、要追溯的受控文件：必填欄位、負責人審閱、定期複審' };
+export const DOC_FIELD_TYPES = ['text', 'longtext', 'number', 'date', 'enum', 'enums', 'subject', 'subjects', 'object', 'objects', 'doc', 'url', 'person'];
 
 export function kindOfId(id) {
   if (typeof id !== 'string') return null;
   if (id.startsWith('ACT-')) return 'action';
+  if (id.startsWith('DOC-')) return 'doc';
+  if (id.startsWith('TPL-')) return 'template';
   const p = id.split('-')[0];
   return { S: 'subject', O: 'object', B: 'binding', A: 'assertion', R: 'relation', P: 'pipeline', C: 'conflict', F: 'feedback', G: 'gap' }[p] || null;
 }

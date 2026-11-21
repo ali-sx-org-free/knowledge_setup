@@ -87,6 +87,7 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
     if (err.index !== undefined) body.error.index = err.index;
     if (err.missing) body.error.missing = err.missing;
     if (err.problems) body.error.problems = err.problems;
+    if (err.current) body.error.current = err.current;
     res.status(status).json(body);
   });
 

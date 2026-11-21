@@ -1,6 +1,7 @@
 // 教程 Prompt：三方智能體拉取後即可學會如何使用本系統生產或消費知識。
 // 教程與 Schema 的說明文字按請求語言返回（見 ../i18n/index.js）；枚舉值是 API 的值，表格中保留繁體原文並附譯名。
-import { SUBJECT_TYPES, RELATION_TYPES, ASSERTION_TYPES, OBJECT_CATEGORIES, LEVEL_INFO, ACTION_KINDS } from '../store/model.js';
+import { SUBJECT_TYPES, RELATION_TYPES, ASSERTION_TYPES, OBJECT_CATEGORIES, LEVEL_INFO, ACTION_KINDS, DOC_STATUS, DOC_REVISION, DOC_PURPOSE, DOC_FIELD_TYPES } from '../store/model.js';
+import { localizeTemplate } from '../store/doc-templates.js';
 import { tr, currentLocale } from '../i18n/index.js';
 
 function table(headers, rows) {
@@ -175,11 +176,68 @@ ${tr('你正在連接一個**私有供應鏈技術系統**的知識庫（訂單�
 - ${tr('待補充的知識缺口：{n} 個（{link}）', { n: h.uncoveredQueries.openGaps, link: `\`GET ${api}/gaps\`` })}
 `;
 
-  const body = role === 'consumer' ? [header, concepts, consumerApi] : [header, concepts, producerRules, producerApi, consumerApi];
+  const templates = [...store.docTemplates.values()].sort((a, b) => a.id.localeCompare(b.id));
+  const tplName = tp => { const label = localizeTemplate(tp).label; return label === tp.name ? tp.name : tr('{value}（{label}）', { value: tp.name, label }); };
+  const tplRows = templates.map(tp => [tp.id, tplName(tp), enumCell(tp.purpose), tp.approval === 'owner' ? tr('負責人審閱後發布') : tr('人類貢獻者可直接發布'), tp.reviewEveryDays ? tr('{n} 天', { n: tp.reviewEveryDays }) : '—']);
+  const docsRead = `### ${tr('讀文檔')}
+- ${tr('`GET {api}/docs?q=` 搜索已發布的文檔（查詢中的別名會先解析為規範主體）；`GET {api}/doc-sections?q=` 段級搜索，不用整篇下載。', { api })}
+- ${tr('`GET {api}/docs/{id}/sections` 按章節分段讀取，每段帶錨點、標題路徑、正文和引用寫法。引用文檔時寫 `〔DOC-0001§計算公式·v4〕`，與斷言的引用分開標註。', { api })}
+- ${tr('知識卡 `GET {api}/subjects/{id}` 的 `documents` 列出以該主體為依據（relation: binding，帶層級）或提到它（relation: link）的文檔。', { api })}
+- ${tr('文檔是原文補充，不改變知識的層級規則：回答時仍以斷言和綁定的層級為準。')}
+`;
+  const docsChapter = `## ${tr('5. 文檔')}
+
+${tr('**什麼時候寫斷言、什麼時候寫文檔**：一句話能說清、要單獨驗證、單獨失效的知識寫斷言；需要背景、步驟、上下文的寫文檔（SOP、口徑定義、設計文檔等）。文檔發布後登記為制度類客體，可以作為斷言的證據和主體的依據。')}
+
+### ${tr('模板')}
+${table([tr('模板'), tr('名稱'), tr('類別'), tr('發布'), tr('複審')], tplRows)}
+
+### ${tr('流程')}
+1. ${tr('`GET {api}/doc-templates` 看有哪些模板；`POST {api}/doc-templates/{id}/render` 取得正文骨架和欄位說明。', { api })}
+2. ${tr('`POST {api}/docs` 建立草稿，可以一次帶齊正文；回應帶 `problems`（體檢結果）。', { api })}
+3. ${tr('按體檢結果修改：`PUT {api}/docs/{id}/draft`，帶上次回應中的 `etag`；別人改過時返回 409 `draft_conflict`，先讀取再合併。', { api })}
+4. ${tr('`POST {api}/docs/{id}/submit` 提交審閱。**你不能發布**：智能體發布返回 403 `agent_cannot_publish`，由人審閱後發布。', { api })}
+5. ${tr('冷啟動時可以在 `/batch` 中用 `doc.create`、`doc.link` 與客體、主體、斷言一起提交。')}
+
+\`\`\`json
+POST ${api}/docs
+{
+  "template": "TPL-0004",
+  "title": "缺貨率口徑定義",
+  "folder": "通用",
+  "summary": "缺貨率的計算口徑：可售庫存為 0 的 SKU 佔在售 SKU 的比例。",
+  "fields": { "metric": "S-INV-0015", "effectiveFrom": "2026-12-01" },
+  "owner": "庫存域架構師",
+  "tags": ["口徑"],
+  "body": "## 定義\\n\\n[[S-INV-0015]] ……\\n\\n## 計算公式\\n\\n缺貨率 = 可售庫存為 0 的 SKU 數 ÷ 在售 SKU 數\\n\\n## 數據來源\\n\\n- [[O-0002]]\\n"
+}
+\`\`\`
+
+### ${tr('寫作規範（保存和提交時自動體檢）')}
+${table([tr('規則'), tr('要求')], [
+  ['D1', tr('標題寫明講的是什麼；同一文件夾不重名')],
+  ['D2', tr('發布前需要摘要，不超過 200 字')],
+  ['D3', tr('正文用 ##、### 分章節，不用 #；單節不超過 2,000 字（檢索按章節切分）')],
+  ['D4', tr('模板的必填欄位、必填章節齊全，欄位格式正確')],
+  ['D5', tr('把模板的 `<!-- 提示 -->` 換成內容')],
+  ['D6', tr('用 `[[ID]]` 引用的條目必須存在；不引用 E1 知識')],
+  ['D7', tr('正文提到的已登記主體要關聯（subjects）；多義別名寫規範名')],
+  ['D8', tr('動態值不寫具體數字，寫明以哪個系統為準、怎麼取')],
+  ['D9', tr('「最近」「目前」這類詞寫明日期')],
+  ['D10', tr('不寫金鑰、權杖、密碼、私鑰：疑似機密的內容拒絕保存')],
+  ['D11', tr('至少關聯一個主體或客體')],
+  ['D12', tr('管理類文檔要有負責人（owner）')]
+])}
+
+${tr('引用寫法：{refs}。', { refs: '`[[S-INV-0012]]`、`[[A-0001]]`、`[[O-0002]]`、`[[DOC-0003]]`、`[[DOC-0003#計算公式]]`' })}
+
+${docsRead}`;
+
+  const body = role === 'consumer' ? [header, concepts, consumerApi, `## ${tr('3. 文檔')}\n\n${docsRead}`] : [header, concepts, producerRules, producerApi, consumerApi, docsChapter];
   return body.join('\n');
 }
 
-const BATCH_OPS = ['subject.create', 'subject.update', 'object.create', 'object.update', 'binding.create', 'assertion.create', 'assertion.update', 'relation.create', 'evidence.add', 'conflict.create', 'feedback.create'];
+const BATCH_OPS = ['subject.create', 'subject.update', 'object.create', 'object.update', 'binding.create', 'assertion.create', 'assertion.update', 'relation.create', 'evidence.add', 'conflict.create', 'feedback.create', 'doc.create', 'doc.link'];
 
 /** 機器可讀的類型定義。結構與枚舉值不隨語言變化；desc、example、direction 等說明文字按請求語言返回，label 是枚舉值的譯名。 */
 export function buildSchema(store) {
@@ -202,6 +260,15 @@ export function buildSchema(store) {
       registeredPipeline: tr('按管道校驗結果直接定級'),
       e1Submission: tr('允許，必須提供 invalidReason')
     },
-    batchOps: BATCH_OPS
+    batchOps: BATCH_OPS,
+    docs: {
+      statuses: DOC_STATUS.map(v => ({ value: v, label: tr(v) })),
+      revisions: DOC_REVISION.map(v => ({ value: v, label: tr(v) })),
+      purposes: map(DOC_PURPOSE, (v, k) => ({ label: tr(k), desc: tr(v) })),
+      fieldTypes: DOC_FIELD_TYPES,
+      templates: [...store.docTemplates.values()].sort((a, b) => a.id.localeCompare(b.id)).map(tp => { const v = localizeTemplate(tp); return { id: tp.id, name: tp.name, label: v.label, purpose: tp.purpose, approval: tp.approval, reviewEveryDays: tp.reviewEveryDays, immutable: !!tp.immutable, objectKind: tp.objectKind }; }),
+      refSyntax: '[[S-INV-0012]] [[A-0001]] [[O-0002]] [[DOC-0003]] [[DOC-0003#anchor]]',
+      citation: '〔DOC-0001§heading·v4〕'
+    }
   };
 }
