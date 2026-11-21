@@ -32,7 +32,8 @@ export async function docHistory(lib, doc, { limit = 100 } = {}) {
     else if (pm.title !== m.title) Object.assign(ev, { type: 'rename', from: pm.title, to: m.title });
     else if (!sameList(pm.tags, m.tags)) Object.assign(ev, { type: 'tags', added: (m.tags || []).filter(x => !(pm.tags || []).includes(x)), removed: (pm.tags || []).filter(x => !(m.tags || []).includes(x)) });
     else if ((pm.review?.lastAt || null) !== (m.review?.lastAt || null)) Object.assign(ev, { type: 'review', nextAt: m.review?.nextAt || null });
-    else if (prev.body !== parsed.body) Object.assign(ev, { type: 'git_edit' });
+    // 正文、摘要或欄位變了但版本號沒變：在 Git 中直接修改了內容（系統的整理只改標籤、關聯、負責人和位置）
+    else if (prev.body !== parsed.body || (pm.summary ?? null) !== (m.summary ?? null) || JSON.stringify(pm.fields || {}) !== JSON.stringify(m.fields || {})) Object.assign(ev, { type: 'git_edit' });
     else Object.assign(ev, { type: 'organize' });
     events.push(ev);
     prev = { meta: m, body: parsed.body, folder };
@@ -189,7 +190,16 @@ export async function docDiff(lib, doc, { from, to } = {}) {
     return { label: `v${r.version}`, version: r.version, hash: r.hash, meta: r.meta, body: r.body };
   };
   const toSpec = to ?? (doc.draft ? 'draft' : 'current');
-  const fromSpec = from ?? (toSpec === 'draft' ? 'current' : Number(toSpec === 'current' ? doc.pub?.meta.version : toSpec) - 1 || 'current');
+  let fromSpec = from;
+  if (fromSpec === undefined || fromSpec === null || fromSpec === '') {
+    if (toSpec === 'draft') fromSpec = 'current';
+    else {
+      // 版本號不一定連續（接管時從起始版本算），上一版按歷史中的版本列表找；沒有更早的版本時與自己比較
+      const v = Number(toSpec === 'current' ? doc.pub?.meta.version : toSpec);
+      const prev = (await docHistory(lib, doc)).versions.map(x => Number(x.version)).filter(x => x < v).sort((x, y) => y - x)[0];
+      fromSpec = prev ?? toSpec;
+    }
+  }
   const a = await side(fromSpec);
   const b = await side(toSpec);
   return { from: { label: a.label, version: a.version, hash: a.hash || null }, to: { label: b.label, version: b.version, hash: b.hash || null }, ...compareDocs(a, b) };

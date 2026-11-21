@@ -1400,7 +1400,7 @@ async function templateDialog(id) {
 }
 
 async function templateEditor(id) {
-  const source = id ? (await get(`/api/v1/doc-templates/${enc(id)}?source=1`)).source : {
+  const source = id ? (await get(`/api/v1/doc-templates/${enc(id)}?source=1`)).data.source : {
     name: '新模板', purpose: '管理', objectKind: '知識文檔', approval: 'owner', reviewEveryDays: 180, immutable: false, defaultFolder: '通用', description: '一句話說明什麼時候用這個模板',
     fields: [{ key: 'effectiveFrom', label: '生效日期', type: 'date', required: true }],
     sections: [{ heading: '目的', required: true, guidance: '為什麼需要這份文檔' }, { heading: '內容', required: true }]

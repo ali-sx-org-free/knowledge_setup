@@ -190,7 +190,12 @@ export class DocLibrary {
     const id = String(parsed.meta.id);
     if (kindOfId(id) !== 'doc') { st.loadErrors.push({ file: rel, error: tr('文檔 ID {id} 格式不正確（應為 DOC-0001）', { id }) }); return; }
     const doc = this.docs.get(id) || { id, pub: null, draft: null };
-    if (doc.pub) { st.loadErrors.push({ file: rel, error: tr('文檔 ID {id} 與 {other} 重複，已忽略', { id, other: doc.pub.path }) }); return; }
+    if (doc.pub) {
+      // 重複 ID：檔名按規範以 ID 開頭的那份為準（例如在 Git 中複製出的副本不會頂替原文檔）
+      const canonical = f => path.posix.basename(f).startsWith(`${id}-`) || path.posix.basename(f) === `${id}.md`;
+      if (!canonical(rel) || canonical(doc.pub.path)) { st.loadErrors.push({ file: rel, error: tr('文檔 ID {id} 與 {other} 重複，已忽略', { id, other: doc.pub.path }) }); return; }
+      st.loadErrors.push({ file: doc.pub.path, error: tr('文檔 ID {id} 與 {other} 重複，已忽略', { id, other: rel }) });
+    }
     const meta = normalizeMeta(parsed.meta);
     if (!['已發布', '已廢止'].includes(meta.status)) meta.status = '已發布';
     doc.pub = { path: rel, meta, body: parsed.body, etag: etagOf(text) };
