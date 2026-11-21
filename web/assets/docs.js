@@ -742,13 +742,16 @@ function historyDialog(d, history, { diff } = {}) {
   const canDiff = canWrite() && opts.length > 1;
   const cur = history.versions[0] ? String(history.versions[0].version) : null;
   const to0 = diff ? String(diff) : d.draft && canWrite() ? 'draft' : cur;
-  const from0 = to0 === 'draft' ? cur : String(Number(to0) - 1);
-  modal(t('歷史與差異 · {id}', { id: d.id }), `<div id="hist-root">${canDiff ? `<div class="inline-form diff-pick">${field(t('從'), select('from', opts, opts.some(o => o[0] === from0) ? from0 : opts[opts.length - 1][0]))}${field(t('到'), select('to', opts, to0))}<button type="button" class="button" id="diff-go">${t('比較')}</button></div><div id="diff-out" class="diff-out"></div>` : ''}<h3 class="dialog-h">${t('時間線')}</h3>${timelineHtml(d, history)}${history.events.length >= 100 ? `<p class="muted">${t('只顯示最近 100 個提交；更早的請在 Git 中查看。')}</p>` : ''}</div>`);
+  // 版本號不一定連續（接管時從 v3 起算），上一版按歷史列表找
+  const prevOf = v => { const i = history.versions.findIndex(x => String(x.version) === String(v)); return i >= 0 && history.versions[i + 1] ? String(history.versions[i + 1].version) : null; };
+  const from0 = to0 === 'draft' ? cur : prevOf(to0);
+  modal(t('歷史與差異 · {id}', { id: d.id }), `<div id="hist-root">${canDiff ? `<div class="inline-form diff-pick">${field(t('從'), select('from', opts, from0 && opts.some(o => o[0] === from0) ? from0 : to0))}${field(t('到'), select('to', opts, to0))}<button type="button" class="button" id="diff-go">${t('比較')}</button></div><div id="diff-out" class="diff-out"></div>` : ''}<h3 class="dialog-h">${t('時間線')}</h3>${timelineHtml(d, history)}${history.events.length >= 100 ? `<p class="muted">${t('只顯示最近 100 個提交；更早的請在 Git 中查看。')}</p>` : ''}</div>`);
   const show = async () => {
     const out = $('#diff-out');
     if (!out) return;
     const from = $('#dialog-content [name=from]').value;
     const to = $('#dialog-content [name=to]').value;
+    if (from === to) { out.innerHTML = `<p class="notice">${esc(to !== 'draft' && !prevOf(to) ? t('v{v} 是第一個發布的版本，沒有更早的版本可比較。', { v: to }) : t('請選擇兩個不同的版本。'))}</p>`; return; }
     out.innerHTML = `<p class="muted">${t('載入中…')}</p>`;
     try { out.innerHTML = diffHtml(await get(`/api/v1/docs/${enc(d.id)}/diff?${qs({ from, to })}`), tpl); } catch (err) { out.innerHTML = `<p class="notice warn">${esc(err.message)}</p>`; }
   };
@@ -757,7 +760,7 @@ function historyDialog(d, history, { diff } = {}) {
     const b = e.target.closest('[data-diff-to]');
     if (!b || !$('#diff-out')) return;
     $('#dialog-content [name=to]').value = b.dataset.diffTo;
-    $('#dialog-content [name=from]').value = String(Number(b.dataset.diffTo) - 1);
+    $('#dialog-content [name=from]').value = prevOf(b.dataset.diffTo) || b.dataset.diffTo;
     show();
     $('#diff-out').scrollIntoView({ block: 'start' });
   });
@@ -1375,7 +1378,7 @@ async function pageTemplates() {
   const list = await loadTemplates(true);
   const purposes = ctx.schema()?.docs?.purposes || {};
   setActions(isOwner() ? `<button class="button" id="tpl-new">${t('新增模板')}</button>` : '');
-  content().innerHTML = `<div class="stack" id="tpl-root">${['知識', '管理'].map(g => panel(esc(t('{purpose}文檔（{n}）', { purpose: tv(g), n: list.filter(x => x.purpose === g).length })), `${purposes[g] ? `<p class="panel-note muted">${esc(purposes[g])}</p>` : ''}${table(['ID', t('名稱'), t('發布'), t('複審'), t('欄位'), t('章節（必填）'), t('預設文件夾'), '#' + t('使用'), t('操作')], list.filter(x => x.purpose === g).map(x => `<tr><td>${esc(x.id)}</td><td class="wrap"><strong>${esc(x.label)}</strong><span class="cell-sub">${esc(x.descriptionText || '')}</span></td><td>${x.approval === 'owner' ? pill(t('負責人審閱'), 'amber') : pill(t('貢獻者直接發布'), 'green')}${x.immutable ? ` ${pill(t('不可修訂'))}` : ''}</td><td>${x.reviewEveryDays ? esc(t('每 {n} 天', { n: x.reviewEveryDays })) : '—'}</td><td class="wrap-sm">${x.fields.map(f => esc(f.labelText)).join(t('、')) || '—'}</td><td class="wrap-sm">${esc(t('{n} 節（{r}）', { n: x.sections.length, r: x.sections.filter(s => s.required).length }))}</td><td>${esc(x.defaultFolder || '—')}</td><td class="numeric">${x.usage}</td><td><div class="cell-actions"><button type="button" class="text-btn" data-tpl-view="${esc(x.id)}">${t('查看')}</button>${canWrite() ? `<button type="button" class="text-btn" data-tpl-new="${esc(x.id)}">${t('用它新建')}</button>` : ''}${isOwner() ? `<button type="button" class="text-btn" data-tpl-edit="${esc(x.id)}">${t('編輯')}</button>` : ''}</div></td></tr>`), t('沒有模板'))}`)).join('')}</div>`;
+  content().innerHTML = `<div class="stack" id="tpl-root">${['知識', '管理'].map(g => panel(esc(t('{purpose}文檔（{n}）', { purpose: tv(g), n: list.filter(x => x.purpose === g).length })), `${purposes[g]?.desc ? `<p class="panel-note muted">${esc(purposes[g].desc)}</p>` : ''}${table(['ID', t('名稱'), t('發布'), t('複審'), t('欄位'), t('章節（必填）'), t('預設文件夾'), '#' + t('使用'), t('操作')], list.filter(x => x.purpose === g).map(x => `<tr><td>${esc(x.id)}</td><td class="wrap"><strong>${esc(x.label)}</strong><span class="cell-sub">${esc(x.descriptionText || '')}</span></td><td>${x.approval === 'owner' ? pill(t('負責人審閱'), 'amber') : pill(t('貢獻者直接發布'), 'green')}${x.immutable ? ` ${pill(t('不可修訂'))}` : ''}</td><td>${x.reviewEveryDays ? esc(t('每 {n} 天', { n: x.reviewEveryDays })) : '—'}</td><td class="wrap-sm">${x.fields.map(f => esc(f.labelText)).join(t('、')) || '—'}</td><td class="wrap-sm">${esc(t('{n} 節（{r}）', { n: x.sections.length, r: x.sections.filter(s => s.required).length }))}</td><td>${esc(x.defaultFolder || '—')}</td><td class="numeric">${x.usage}</td><td><div class="cell-actions"><button type="button" class="text-btn" data-tpl-view="${esc(x.id)}">${t('查看')}</button>${canWrite() ? `<button type="button" class="text-btn" data-tpl-new="${esc(x.id)}">${t('用它新建')}</button>` : ''}${isOwner() ? `<button type="button" class="text-btn" data-tpl-edit="${esc(x.id)}">${t('編輯')}</button>` : ''}</div></td></tr>`), t('沒有模板'))}`)).join('')}</div>`;
   $('#tpl-root').addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;

@@ -146,16 +146,18 @@ export function hunks(lines, context = 3) {
 /** 兩個版本的差異：欄位與元資料的變化、按章節的增刪改、逐行差異。 */
 export function compareDocs(from, to) {
   const metaKeys = ['title', 'summary', 'tags', 'owner', 'subjects', 'objects', 'related'];
+  // 空值、空字串、空陣列都視為「沒有」，避免舊版缺欄位被當成變化。
+  const norm = v => (v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length) ? null : v);
   const meta = [];
   for (const k of metaKeys) {
-    const a = from.meta?.[k] ?? null;
-    const b = to.meta?.[k] ?? null;
+    const a = norm(from.meta?.[k]);
+    const b = norm(to.meta?.[k]);
     if (JSON.stringify(a) !== JSON.stringify(b)) meta.push({ key: k, from: a, to: b });
   }
   const fields = [];
   const fa = from.meta?.fields || {};
   const fb = to.meta?.fields || {};
-  for (const k of new Set([...Object.keys(fa), ...Object.keys(fb)])) if (JSON.stringify(fa[k] ?? null) !== JSON.stringify(fb[k] ?? null)) fields.push({ key: k, from: fa[k] ?? null, to: fb[k] ?? null });
+  for (const k of new Set([...Object.keys(fa), ...Object.keys(fb)])) if (JSON.stringify(norm(fa[k])) !== JSON.stringify(norm(fb[k]))) fields.push({ key: k, from: norm(fa[k]), to: norm(fb[k]) });
   const sa = parseSections(from.body);
   const sb = parseSections(to.body);
   const byAnchor = new Map(sa.map(s => [s.anchor, s]));
