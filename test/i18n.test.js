@@ -126,7 +126,7 @@ test('後台語言偵測與持久化短語的匹配規則', () => {
   assert.equal(detectLocale({ languages: ['zh-CN'] }), 'zh-CN');
   assert.equal(detectLocale({ languages: ['fr-FR'] }), 'en', '不支持的語言回退英文');
   for (const [template, re] of DATA_PATTERNS) {
-    const sample = template.replace(/\{(\w+)\}/g, (_, k) => (k === 'status' ? '200' : k === 'id' && template.startsWith('裁決') ? 'C-0001' : `X${k}`));
+    const sample = template.replace(/\{(\w+)\}/g, (_, k) => (k === 'status' || k === 'version' ? '200' : k === 'id' && template.startsWith('裁決') ? 'C-0001' : k === 'id' && /v\{version\}|^文檔/.test(template) ? 'DOC-0001' : `X${k}`));
     assert.match(sample, re, template);
   }
 });

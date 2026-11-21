@@ -1,6 +1,7 @@
 // 庫存域示例資料：設計文件「示例：可售庫存」的完整演示。系統名、表名、接口名與數值均為示意。
 // 走真實流程：先以人身份提交（寫入上限 L1/L2），再由 Action 校驗（→ L0 自動）與負責人確認（→ L0 人工）晉升。
 import { RuleError } from '../store/validity.js';
+import { docMessages } from '../store/docs.js';
 
 const SUBJECTS = [
   ['inv-center', '庫存中心', '系統', 'INV', '管理全渠道庫存數量與預佔的權威系統；不負責倉內作業'],
@@ -127,5 +128,149 @@ export async function seedInventory(ctx, principal) {
     for (const rid of [...store.relations.values()].filter(x => x.type === '別名').map(x => x.id)) store.confirm(t, rid, { note: '示例資料：別名確認' }, principal);
   });
 
-  return { subjects: Object.keys(ids).length, focus: ids.atp, ids };
+  // 5. 文檔庫：初始文件夾與標籤；DOC-0001 接管 O-0001（從 v3 起算，v4 小修）；SOP 草稿 DOC-0002；《知識庫寫作指南》DOC-0003
+  const docs = await seedDocuments(store, principal, ids, made);
+
+  return { subjects: Object.keys(ids).length, focus: ids.atp, ids, docs };
+}
+
+const FOLDERS = [
+  { path: '庫存', domain: 'INV', description: '庫存域：可售庫存、預佔、調撥等' },
+  { path: '庫存/口徑', defaultTemplate: 'TPL-0004', defaultTags: ['口徑'], description: '庫存指標的計算口徑' },
+  { path: '庫存/SOP', defaultTemplate: 'TPL-0003', defaultTags: ['SOP'], description: '庫存相關的標準作業程序' },
+  { path: '訂單', domain: 'ORD', description: '訂單域：訂單、履約、分倉' },
+  { path: '倉儲', domain: 'WMS', description: '倉儲域：倉內作業' },
+  { path: '運輸', domain: 'TMS', description: '運輸域：承運與配送' },
+  { path: '計劃補貨', domain: 'PLN', description: '計劃與補貨' }
+];
+const TAGS = { 口徑: { group: '主題', color: 'blue', description: '指標的計算口徑' }, 對外: { group: '受眾', color: 'green', description: '可以給業務方和外部系統看的文檔' }, SOP: { group: '類型', color: 'amber', description: '標準作業程序' }, 指南: { group: '類型', color: 'purple', description: '寫作與使用指南' } };
+
+async function seedDocuments(store, principal, ids, made) {
+  const lib = store.docs;
+  await store.tx(principal, '[示例] 文檔庫：初始文件夾與標籤', t => {
+    for (const f of FOLDERS) if (!lib.findFolder(f.path)) lib.createFolder(t, f, principal);
+    for (const [name, info] of Object.entries(TAGS)) lib.updateTag(t, name, info, principal);
+  });
+
+  // DOC-0001：接管原來登記在 wiki 上的《庫存口徑定義 v3》（O-0001），版本從 v3 起算
+  const S = ids;
+  const v3 = `## 定義
+
+[[${S.atp}]] 指可被下單佔用的庫存數量：不含已預佔和凍結部分，也不含 [[${S.safety}]]。它是對外承諾能賣多少的唯一依據。
+
+## 計算公式
+
+本口徑下，可售庫存（ATP）按 SKU + 倉庫計算：
+
+\`\`\`
+可售庫存 = 實物庫存 − 已預佔 − 凍結 − 安全庫存
+\`\`\`
+
+- [[${S.physical}]]：倉庫中實際存在的數量，含已預佔和凍結部分
+- [[${S.reserved}]]：已被訂單佔用、尚未出庫的數量
+- [[${S.frozen}]]：因質檢、盤點等原因暫不可用的數量
+- [[${S.safety}]]：為應對波動保留、不對外售賣的數量
+
+## 數據來源
+
+| 項目 | 權威來源 | 說明 |
+| --- | --- | --- |
+| 實物庫存 | [[${made.o.field}]] | [[${S['inv-center']}]] 按 SKU + 倉庫維護 |
+| 可售庫存 | [[${made.o.api}]] | 動態值：經取值 Action 實時讀取，文檔中不寫具體數字 |
+
+## 邊界情況
+
+- 計算結果為負時，對外按 0 展示（見 [[${made.a.neg}]]）。
+- 在途調撥的數量不計入任何一倉的可售庫存。
+
+## 示例
+
+SKU-123 在上海一號倉：實物 120、已預佔 30、凍結 5、安全庫存 10，可售庫存為 75。數字僅為示意。
+
+## 變更說明
+
+v3 起扣減安全庫存，舊口徑 [[${made.a.old}]] 作廢。
+`;
+  const v4 = v3.replace('SKU-123 在上海一號倉：實物 120、已預佔 30、凍結 5、安全庫存 10，可售庫存為 75。數字僅為示意。', `SKU-123 在上海一號倉：實物 120、已預佔 30、凍結 5、安全庫存 10，可售庫存為 75。數字僅為示意。
+
+跨倉調撥：上海一號倉調往北京一號倉的 20 件，出庫後到上架前為在途，兩個倉都不計入；在北京一號倉上架後才計入北京一號倉的可售庫存。`).replace('v3 起扣減安全庫存，舊口徑', 'v4 補充跨倉調撥示例。v3 起扣減安全庫存，舊口徑');
+  const { result: d1 } = await store.tx(principal, docMessages.create, t => lib.create(t, {
+    template: 'TPL-0004', title: '庫存口徑定義', folder: '庫存/口徑', owner: '庫存域架構師',
+    summary: '可售庫存、實物庫存、安全庫存等庫存指標的統一計算口徑；自 v3 起可售庫存扣減安全庫存。',
+    tags: ['口徑', '對外'], subjects: [S.atp, S.physical, S.safety, S.reserved, S.frozen],
+    fields: { metric: S.atp, ownerSystem: S['inv-center'], effectiveFrom: '2026-06-01', scope: '全渠道' },
+    takeOverObjectId: made.o.doc, startVersion: 3, body: v3
+  }, principal));
+  await store.tx(principal, docMessages.publish, t => lib.publish(t, d1.id, { note: `從 wiki 接管《庫存口徑定義 v3》（${made.o.doc}）` }, principal));
+  await store.tx(principal, docMessages.save, t => lib.saveDraft(t, d1.id, { etag: lib.get(d1.id).pub.etag, body: v4 }, principal));
+  await store.tx(principal, docMessages.publish, t => lib.publish(t, d1.id, { major: false, note: '補充跨倉調撥示例' }, principal));
+
+  // DOC-0002：SOP 草稿，還差異常處理（體檢會提示）
+  const { result: d2 } = await store.tx(principal, docMessages.create, t => lib.create(t, {
+    template: 'TPL-0003', title: '跨倉調撥作業 SOP', folder: '庫存/SOP', owner: '倉儲域架構師',
+    summary: '庫存在倉庫之間調撥時，從建單、出庫、在途到入庫上架的作業步驟與異常處理。',
+    tags: ['SOP'], subjects: [S.transfer],
+    fields: { process: S.outbound, roles: '庫存計劃員、倉庫主管、揀貨員', effectiveFrom: '2026-12-01' },
+    body: `## 目的
+
+保證調撥期間 [[${S.atp}]] 準確：在途數量不被重複售賣，到倉後及時可售。
+
+## 適用範圍
+
+全部自營倉之間的 [[${S.transfer}]]。不適用於供應商直送和退貨入庫。
+
+## 角色與職責
+
+- 庫存計劃員：建調撥單，確認調出倉的可售庫存足夠
+- 倉庫主管：審核調撥單，安排出庫和收貨
+- 揀貨員：按出庫指令揀貨
+
+## 操作步驟
+
+1. 庫存計劃員在庫存中心建調撥單，選擇調出倉、調入倉和 SKU 數量。
+2. 倉庫主管審核；審核通過後系統下發 [[${S['outbound-cmd']}]]。
+3. 調出倉按 [[${S.outbound}]] 揀貨出庫；出庫後數量轉為在途。
+4. 調入倉收貨驗收後按 [[${S.putaway}]] 上架；上架完成後計入調入倉可售庫存。
+
+## 異常處理
+
+<!-- 提示：常見異常、處理方式和升級對象 -->
+
+`
+  }, principal));
+
+  // DOC-0003：《知識庫寫作指南》，知識條目，貢獻者可直接發布
+  const { result: d3 } = await store.tx(principal, docMessages.create, t => lib.create(t, {
+    template: 'TPL-0001', title: '知識庫寫作指南', folder: '通用', owner: '知識庫管理員',
+    summary: '什麼時候寫斷言、什麼時候寫文檔，以及怎樣寫出智能體和人都能準確引用的文檔。',
+    tags: ['指南'],
+    body: `## 概述
+
+一句話能說清、要單獨驗證的知識寫成斷言；需要背景、步驟和上下文的寫成文檔。文檔發布後登記為制度客體，可以作為主體的依據和斷言的證據。
+
+## 詳細說明
+
+- **分章節**：用 \`##\` 和 \`###\` 分章節。檢索和智能體按章節切分、按章節引用，例如 〔${d1.id}§計算公式·v4〕。
+- **用引用代替複述**：講到已登記的主體、知識或其他文檔時寫 \`[[ID]]\`，例如 [[${S.atp}]]、[[${d1.id}#計算公式]]。被引用的知識失效時，體檢會提醒你更新。
+- **動態值不寫數字**：庫存數量、單據狀態這類會變的值，寫明以哪個系統為準、怎麼取，不寫具體數字。
+- **寫明日期**：不寫「最近」「目前」，寫成具體日期，日後才讀得懂。
+- **不放機密**：金鑰、密碼、權杖不進知識倉庫；疑似機密的內容會被拒絕保存。
+
+## 示例
+
+口徑定義的寫法可以參考 [[${d1.id}]]：定義、計算公式、數據來源分節，涉及的指標都用 [[S-…]] 引用。
+
+## 常見問題
+
+**修訂已發布的文檔會影響知識嗎？** 小修不影響；重大修訂時，發布者勾選的知識降為 L1 並排入重驗。
+
+**智能體能發布文檔嗎？** 不能。智能體可以建草稿、按體檢結果修改、提交審閱，由人發布。
+
+## 相關知識
+
+- [[${d1.id}]]
+`
+  }, principal));
+  await store.tx(principal, docMessages.publish, t => lib.publish(t, d3.id, { note: '第一版' }, principal));
+  return { [d1.id]: '庫存口徑定義', [d2.id]: '跨倉調撥作業 SOP', [d3.id]: '知識庫寫作指南' };
 }

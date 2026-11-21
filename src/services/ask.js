@@ -5,7 +5,7 @@ import { LEVEL_INFO, LEVEL_RANK } from '../store/model.js';
 import { RuleError } from '../store/validity.js';
 import { tr, currentLocale } from '../i18n/index.js';
 
-const DYNAMIC_RE = /多少|幾個|几个|幾件|几件|還有|还有|剩餘|剩余|當前|当前|目前|現在|现在|實時|实时|此刻|狀態|状态|在途|餘量|余量|how many|current|status/i;
+export const DYNAMIC_RE = /多少|幾個|几个|幾件|几件|還有|还有|剩餘|剩余|當前|当前|目前|現在|现在|實時|实时|此刻|狀態|状态|在途|餘量|余量|how many|current|status/i;
 const HISTORY_RE = /以前|之前|過去|过去|曾經|曾经|原來|原来|舊|旧|改成|變更|变更|歷史|历史|是不是不|previous|used to/i;
 const DEFINITION_RE = /是什麼|是什么|什麼是|什么是|指什麼|指什么|怎麼算|怎么算|如何計算|如何计算|怎麼計算|怎么计算|定義|定义|口徑|口径|含義|含义|意思|what is|how .*calculat/i;
 const STOP_PHRASES = ['是什麼', '是什么', '什麼是', '什么是', '指什麼', '指什么', '怎麼算', '怎么算', '如何計算', '如何计算', '怎麼', '怎么', '什麼', '什么', '為什麼', '为什么', '多少', '多久', '會不會', '会不会', '能不能', '可不可以', '可以', '是不是', '有沒有', '有没有', '請問', '请问', '一下', '嗎', '吗', '呢', '吧', '啊'];
