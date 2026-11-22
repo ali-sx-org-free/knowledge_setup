@@ -81,7 +81,7 @@ test('教程與 Schema：說明按語言返回，枚舉值保持繁體原文', a
   assert.deepEqual(schema.relationTypes.擁有.from, ['系統']);
 
   const api = (await t.call('GET', '/api/v1/openapi.json?lang=en')).body;
-  assert.equal(api.paths['/ask'].post.summary, 'Q&A: returns a natural-language answer, citations (with levels) and structured knowledge cards');
+  assert.equal(api.paths['/ask'].post.summary, 'Q&A: returns a natural-language answer, citations (with levels), structured knowledge cards, and supplementary text from related document sections (documents, kept separate from knowledge citations)');
   assert.equal(api.paths['/ask'].post['x-role'], 'consumer');
 });
 

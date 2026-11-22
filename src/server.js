@@ -11,6 +11,7 @@ import { KnowledgeStore } from './store/store.js';
 import { RuleError } from './store/validity.js';
 import { ActionRunner } from './services/actions.js';
 import { ExecutionService } from './services/executions.js';
+import { DocAi } from './services/doc-ai.js';
 import { AskService } from './services/ask.js';
 import { LlmClient } from './services/llm.js';
 import { Auth, HttpError } from './api/auth.js';
@@ -47,6 +48,7 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
     ctx.executions = await new ExecutionService({ store, dir: path.join(dataDir, 'executions', slug), env, fetchImpl, logger, ...executions }).init();
     ctx.actions = new ActionRunner({ store, env, fetchImpl, executions: ctx.executions });
     ctx.ask = new AskService({ store, actions: ctx.actions, llm: ctx.llm, logger });
+    ctx.docAi = new DocAi({ store, llm: ctx.llm, logger });
     return store;
   };
 

@@ -40,6 +40,13 @@ export class ActionRunner {
     const body = action.request?.body ? renderTemplate(action.request.body, ctx, this.env) : null;
     const started = Date.now();
 
+    if (pipeline.type === 'docs') {
+      // 內置文檔庫管道：路徑 /docs/{object.id}，結果來自文檔庫本身。
+      const m = /^\/docs\/([^/?#]+)/.exec(reqPath);
+      const r = m && this.store.docs ? this.store.docs.docObjectStatus(decodeURIComponent(m[1])) : { status: 404, body: { error: 'not found' } };
+      return { ok: r.status < 300, status: r.status, body: r.body, value: getPath(r.body, action.output?.path), url: `docs://${pipeline.id}${reqPath}`, durationMs: Date.now() - started, pipeline: { id: pipeline.id, name: pipeline.name, type: pipeline.type } };
+    }
+
     if (pipeline.type === 'mock') {
       for (const route of pipeline.routes || []) {
         if ((route.method || 'GET').toUpperCase() !== method) continue;
@@ -190,6 +197,7 @@ export class ActionRunner {
     if (!p) throw new RuleError(tr('管道 {id} 不存在', { id: pipelineId }), 404);
     if (p.type === 'mock') return { ok: true, detail: tr('示意管道，共 {n} 條路由', { n: (p.routes || []).length }) };
     if (p.type === 'rpa') return this.testRpaPipeline(p);
+    if (p.type === 'docs') return { ok: true, detail: tr('內置文檔庫管道，讀本系統的文檔狀態') };
     try {
       const res = await this.fetch(p.baseUrl, { method: 'GET', headers: renderTemplate(p.headers || {}, {}, this.env), signal: AbortSignal.timeout(p.timeoutMs || 8000) });
       return { ok: res.status < 500, detail: `HTTP ${res.status}` };

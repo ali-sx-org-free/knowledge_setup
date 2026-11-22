@@ -8,6 +8,9 @@ import { localizeTemplate, skeleton, checkFields } from '../store/doc-templates.
 import { lintDoc } from '../services/doc-lint.js';
 import { docHistory, docDiff, readVersion } from '../services/doc-history.js';
 import { serializeDoc } from '../store/docs.js';
+import { convertToMarkdown, CONVERT_MAX } from '../services/doc-convert.js';
+import { markdownZip } from '../services/doc-export.js';
+import { tokenize } from '../services/doc-search.js';
 import { tr } from '../i18n/index.js';
 
 /** 遠端是 GitHub 或 GitLab 時，檔案在網頁上的地址（不帶憑證）；其他遠端返回 null。 */
@@ -67,10 +70,19 @@ export function docRoutes(r, ctx, { consumer, contributor, baseUrlOf }) {
     });
   });
 
-  r.get('/docs/export', consumer, (req, res) => {
-    if ((req.query.format || 'jsonl') !== 'jsonl') throw new HttpError(400, tr('{field} 必須為 {values}', { field: 'format', values: 'jsonl' }), 'invalid_input');
+  r.get('/docs/export', consumer, async (req, res) => {
+    const format = req.query.format || 'jsonl';
+    if (!['jsonl', 'zip'].includes(format)) throw new HttpError(400, tr('{field} 必須為 {values}', { field: 'format', values: 'jsonl / zip' }), 'invalid_input');
     const base = baseUrlOf(ctx, req);
     const { items } = L().list({ ...req.query, q: undefined, limit: 500, view: undefined }, req.principal);
+    if (format === 'zip') {
+      // Markdown 壓縮包：已發布的文檔（obsolete=1 時含已廢止），圖片與 README 索引
+      const docs = items.map(it => L().get(it.id)).filter(d => d.pub).map(doc => ({ doc }));
+      const out = await markdownZip(L(), docs, { baseUrl: base });
+      res.type('application/zip').setHeader('Content-Disposition', `attachment; filename="docs-${out.generatedAt.slice(0, 10)}.zip"`);
+      res.setHeader('X-Doc-Count', String(out.docs));
+      return res.send(out.buffer);
+    }
     const lines = [];
     for (const it of items) {
       const doc = L().get(it.id);
@@ -101,6 +113,74 @@ export function docRoutes(r, ctx, { consumer, contributor, baseUrlOf }) {
   r.post('/docs/bulk', contributor, async (req, res) => {
     const out = await tx(req, docMessages.bulk, t => L().bulk(t, req.body || {}, req.principal));
     json(res, out);
+  });
+
+  // ------------------------------------------------------------ 第二期：導入、AI 起草、生成手冊
+  // 導入 Word、PDF：請求體是檔案本身；convert 只轉換不寫入（預覽），import 轉換後建立草稿
+  const rawDoc = express.raw({ type: () => true, limit: CONVERT_MAX + 1024 });
+  const rawDocBody = (req, res, next) => rawDoc(req, res, err => {
+    if (err?.type === 'entity.too.large') return next(new HttpError(413, tr('檔案不超過 {n} MB', { n: CONVERT_MAX / 1024 / 1024 }), 'file_too_large'));
+    next(err);
+  });
+  const convertReq = req => convertToMarkdown(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0), { name: String(req.query.name || req.headers['x-file-name'] || ''), contentType: req.headers['content-type'] });
+  r.post('/docs/convert', contributor, rawDocBody, async (req, res) => {
+    S().assertCanContribute(req.principal);
+    res.json({ data: await convertReq(req) });
+  });
+  r.post('/docs/import', contributor, rawDocBody, async (req, res) => {
+    const conv = await convertReq(req);
+    const name = String(req.query.name || req.headers['x-file-name'] || conv.format).replace(/^.*[\\/]/, '');
+    const title = String(req.query.title || conv.title || name.replace(/\.[^.]+$/, '')).trim();
+    const out = await tx(req, docMessages.import, t => {
+      for (const w of conv.warnings) t.warn(w);
+      const created = L().create(t, { title, folder: req.query.folder, template: req.query.template, body: conv.body, tags: req.query.tags }, req.principal);
+      return { ...created, importedFrom: name, format: conv.format };
+    });
+    json(res, out, 201);
+  });
+
+  // AI 起草：按模板和選中主體的 L0、L1 知識生成草稿，標記「AI 起草」；preview=1 只返回內容不寫入
+  r.post('/docs/ai-draft', contributor, async (req, res) => {
+    const draft = await ctx.docAi.draft(req.body || {}, req.principal);
+    if (req.body?.preview === true || req.query.preview === '1') return res.json({ data: draft, warnings: draft.warnings });
+    const out = await tx(req, docMessages.aiDraft, t => {
+      for (const w of draft.warnings) t.warn(w);
+      const created = L().create(t, { template: draft.template, title: draft.title, folder: draft.folder, summary: draft.summary, body: draft.body, subjects: draft.subjects, fields: draft.fields, tags: req.body?.tags }, req.principal, { aiDraft: draft.aiDraft });
+      return { ...created, composer: draft.composer, filled: draft.filled };
+    });
+    json(res, out, 201);
+  });
+
+  // 從知識生成主體手冊（subjectId）或領域手冊（domain）；已經生成過時重新生成
+  r.post('/docs/generate', contributor, async (req, res) => {
+    const out = await tx(req, docMessages.generate, t => L().generate(t, req.body || {}, req.principal));
+    json(res, out, out.result.created ? 201 : 200);
+  });
+  r.post('/docs/:id/regenerate', contributor, async (req, res) => {
+    const out = await tx(req, docMessages.generate, t => L().regenerate(t, req.params.id, req.principal));
+    json(res, out);
+  });
+
+  // 從文檔抽取斷言：items 是 [{ subjectId, type, content, anchor }]；建議（不寫入）走 extract-suggestions
+  r.post('/docs/:id/extract', contributor, async (req, res) => {
+    const out = await tx(req, docMessages.extract, t => L().extractAssertions(t, req.params.id, req.body || {}, req.principal));
+    json(res, out, out.result.created.length ? 201 : 200);
+  });
+  r.post('/docs/:id/extract-suggestions', contributor, async (req, res) => {
+    res.json({ data: await ctx.docAi.suggestAssertions(req.params.id, req.body || {}, req.principal) });
+  });
+
+  r.post('/docs/:id/migrate-basis', contributor, async (req, res) => {
+    const out = await tx(req, docMessages.migrate, t => L().migrateBasis(t, req.params.id, req.principal));
+    json(res, out);
+  });
+
+  // ------------------------------------------------------------ 全局搜索（主體和文檔一起搜）
+  r.get('/search', consumer, (req, res) => {
+    const q = String(req.query.q || '').trim();
+    if (!q) throw new HttpError(400, tr('{field} 必填', { field: 'q' }), 'invalid_input');
+    const limit = Math.min(50, Math.max(1, Number(req.query.limit) || 10));
+    res.json({ data: globalSearch(S(), L(), q, limit, req.principal) });
   });
 
   // ------------------------------------------------------------ 單篇文檔
@@ -154,9 +234,10 @@ export function docRoutes(r, ctx, { consumer, contributor, baseUrlOf }) {
   r.get('/docs/:id/impact', consumer, (req, res) => {
     const doc = L().get(req.params.id);
     const objectId = doc.pub?.meta.objectId || null;
-    const items = L().impactOf(objectId);
+    // 按章節預選（第二期）：比較修訂與已發布版本的章節，sourceRef 指向沒改的章節的知識不預選
+    const { items, changedSections, sectionAware } = L().impactWithSections(doc);
     const linked = L().head(doc).meta.subjects.filter(sid => !items.some(x => x.kind === 'binding' && x.subject?.id === sid)).map(sid => S().subjectSummary(S().subjects.get(sid))).filter(Boolean).filter(s => s.type !== '別名');
-    res.json({ data: { objectId, items, bindable: linked } });
+    res.json({ data: { objectId, items, bindable: linked, changedSections, sectionAware } });
   });
 
   r.put('/docs/:id/draft', contributor, async (req, res) => {
@@ -265,4 +346,52 @@ export function docRoutes(r, ctx, { consumer, contributor, baseUrlOf }) {
     const out = await tx(req, docMessages.template, t => L().upsertTemplate(t, { ...(req.body || {}), id: req.params.id }, req.principal));
     json(res, out);
   });
+}
+
+/**
+ * 全局搜索：主體（名稱、ID、別名、定義、標籤；查詢中的術語按最長匹配解析）與文檔（同文檔庫搜索）一起返回。
+ * 結果按相關度排序：精確命中名稱或 ID 最前，其次是查詢中解析出的術語、名稱包含、別名、定義。
+ */
+export function globalSearch(store, lib, q, limit, principal) {
+  const nq = q.toLowerCase();
+  const resolved = store.resolveTerms(q);
+  const viaTerm = new Map();
+  for (const m of resolved.matches) {
+    const s = store.subjects.get(m.id);
+    const targets = s?.type === '別名' ? store.aliasTargets(s) : [m.id];
+    for (const id of targets) if (!viaTerm.has(id)) viaTerm.set(id, { term: m.term, alias: s?.type === '別名' ? s.name : null });
+  }
+  const terms = tokenize(q).key;
+  const scored = [];
+  for (const s of store.subjects.values()) {
+    if (s.type === '別名') continue;
+    const name = (s.name || '').toLowerCase();
+    const aliases = store.aliasesOf(s.id);
+    let score = 0;
+    let match = null;
+    if (s.id.toLowerCase() === nq || name === nq) { score = 100; match = { field: 'name' }; }
+    else if (viaTerm.has(s.id)) { score = 60; match = viaTerm.get(s.id).alias ? { field: 'alias', text: viaTerm.get(s.id).alias } : { field: 'name' }; }
+    else if (name.includes(nq) || s.id.toLowerCase().includes(nq)) { score = 40; match = { field: 'name' }; }
+    else if (aliases.some(a => (a.name || '').toLowerCase().includes(nq))) { score = 30; match = { field: 'alias', text: aliases.find(a => (a.name || '').toLowerCase().includes(nq)).name }; }
+    else if ((s.tags || []).some(t => t.toLowerCase().includes(nq))) { score = 15; match = { field: 'tag' }; }
+    else if ((s.definition || '').toLowerCase().includes(nq)) { score = 12; match = { field: 'definition' }; }
+    else if (terms.length > 1) {
+      const hay = `${name} ${(s.definition || '').toLowerCase()} ${aliases.map(a => a.name).join(' ').toLowerCase()}`;
+      const hit = terms.filter(t => hay.includes(t)).length;
+      if (hit / terms.length >= 0.6) { score = 5 + hit; match = { field: 'tokens' }; }
+    }
+    if (!score) continue;
+    scored.push({ ...store.subjectSummary(s), definition: s.definition || null, aliases: aliases.map(a => a.name), assertions: s.assertions.filter(a => a.validity.level !== 'E1').length, documents: lib.documentsFor(s.id).length, score: score + Math.min(5, (store.usage.subjects[s.id]?.count || 0) / 20), match });
+  }
+  scored.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id));
+  const docs = lib.list({ q, limit, drafts: lib.canSeeDrafts(principal) ? '1' : undefined }, principal);
+  return {
+    q,
+    subjects: scored.slice(0, limit),
+    subjectTotal: scored.length,
+    documents: docs.items,
+    documentTotal: docs.total,
+    resolved: { canonical: resolved.canonical, ambiguous: resolved.ambiguous.map(a => ({ term: a.term, candidates: a.candidates.map(c => c.id) })) },
+    terms: docs.terms
+  };
 }

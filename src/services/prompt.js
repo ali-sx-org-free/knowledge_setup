@@ -184,6 +184,8 @@ ${tr('你正在連接一個**私有供應鏈技術系統**的知識庫（訂單�
 - ${tr('`GET {api}/docs/{id}/sections` 按章節分段讀取，每段帶錨點、標題路徑、正文和引用寫法。引用文檔時寫 `〔DOC-0001§計算公式·v4〕`，與斷言的引用分開標註。', { api })}
 - ${tr('知識卡 `GET {api}/subjects/{id}` 的 `documents` 列出以該主體為依據（relation: binding，帶層級）或提到它（relation: link）的文檔。', { api })}
 - ${tr('文檔是原文補充，不改變知識的層級規則：回答時仍以斷言和綁定的層級為準。')}
+- ${tr('`POST {api}/ask` 的 `documents` 是相關文檔章節的補充原文（帶 `cite`），與 `citations`（知識引用）分開；`GET {api}/search?q=` 主體和文檔一起搜。', { api })}
+- ${tr('`generated` 不為空的文檔是由知識生成的手冊（正文只讀），內容與知識卡相同，不要把它當作知識的證據。')}
 `;
   const docsChapter = `## ${tr('5. 文檔')}
 
@@ -198,6 +200,8 @@ ${table([tr('模板'), tr('名稱'), tr('類別'), tr('發布'), tr('複審')], 
 3. ${tr('按體檢結果修改：`PUT {api}/docs/{id}/draft`，帶上次回應中的 `etag`；別人改過時返回 409 `draft_conflict`，先讀取再合併。', { api })}
 4. ${tr('`POST {api}/docs/{id}/submit` 提交審閱。**你不能發布**：智能體發布返回 403 `agent_cannot_publish`，由人審閱後發布。', { api })}
 5. ${tr('冷啟動時可以在 `/batch` 中用 `doc.create`、`doc.link` 與客體、主體、斷言一起提交。')}
+6. ${tr('從已發布的文檔提取斷言：`POST {api}/docs/{id}/extract-suggestions` 取建議，`POST {api}/docs/{id}/extract` 寫入（證據是文檔客體，`sourceRef` 寫「DOC-0001§計算公式 v4」，最高 L1）。', { api })}
+7. ${tr('`POST {api}/docs/ai-draft` 按模板和主體的 L0、L1 知識起草，結果是草稿；`POST {api}/docs/import?name=x.docx` 把 Word、PDF 轉成草稿。', { api })}
 
 \`\`\`json
 POST ${api}/docs

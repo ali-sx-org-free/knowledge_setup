@@ -222,7 +222,7 @@ export async function openNewDoc(preset = {}) {
     folder = (cache.folders.find(f => f.domain === preset.domain) || cache.folders.find(f => f.path === name))?.path || '';
   }
   const tplId = preset.template || folderSetting(folder, 'defaultTemplate') || 'TPL-0001';
-  const groups = ['知識', '管理'].map(g => [g, cache.templates.filter(x => x.purpose === g)]).filter(([, l]) => l.length);
+  const groups = ['知識', '管理'].map(g => [g, cache.templates.filter(x => x.purpose === g && !x.generator)]).filter(([, l]) => l.length);
   const cards = groups.map(([g, list]) => `<fieldset class="tpl-pick"><legend>${esc(t('{purpose}文檔', { purpose: tv(g) }))}</legend>${list.map(x => `<label class="tpl-card"><input type="radio" name="template" value="${esc(x.id)}" ${x.id === tplId ? 'checked' : ''}><span><strong>${esc(x.label)}</strong><small>${esc(x.descriptionText || '')}</small><small class="muted">${esc(t(APPROVAL_TEXT[x.approval] || ''))}${x.reviewEveryDays ? ` · ${esc(t('每 {n} 天複審', { n: x.reviewEveryDays }))}` : ''}${x.immutable ? ` · ${esc(t('發布後不可修訂'))}` : ''}</small></span></label>`).join('')}</fieldset>`).join('');
   const takeable = [...cache.objects.values()].filter(o => o.category === '制度' && o.status !== '下線' && !o.docId);
   modal(preset.body ? t('複製為新文檔') : t('新建文檔'), `${folderDatalist()}
@@ -259,13 +259,25 @@ function stripFrontMatter(text) {
   return { body: m ? s.slice(m[0].length).replace(/^\n+/, '') : s, title: m ? m[1].trim() : '' };
 }
 
+const CONVERT_MAX = 20 * 1024 * 1024;
+const isOffice = f => /\.(docx|pdf)$/i.test(f.name || '') || /pdf|officedocument/i.test(f.type || '');
+
+/** Word、PDF 轉 Markdown（不寫入）：請求體是檔案本身。 */
+async function convertFile(file) {
+  const res = await fetch(`/api/v1/docs/convert?name=${enc(file.name || 'file')}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': file.type || 'application/octet-stream', 'accept-language': locale() }, body: file });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new ApiError(res.status, json);
+  return json.data;
+}
+
 async function importDialog(folder) {
   await Promise.all([loadTemplates(), loadFolders()]);
-  modal(t('導入 Markdown'), `${folderDatalist()}<p class="notice">${t('貼上或選擇 .md、.txt 檔案。第一行的「# 標題」會成為文檔標題；導入後在編輯器中按體檢結果補齊章節。')}</p>
-    ${field(t('檔案'), '<input type="file" id="imp-file" accept=".md,.markdown,.txt,text/markdown,text/plain">')}
+  modal(t('導入文檔'), `${folderDatalist()}<p class="notice">${t('選擇 Markdown（.md、.txt）、Word（.docx）或 PDF 檔案，或直接貼上 Markdown。Word、PDF 先轉成 Markdown：標題、列表、表格、粗體和鏈接會保留，圖片和複雜排版不導入。導入後在編輯器中按體檢結果補齊章節。')}</p>
+    ${field(t('檔案'), '<input type="file" id="imp-file" accept=".md,.markdown,.txt,.docx,.pdf,text/markdown,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document">')}
+    <div id="imp-state" aria-live="polite"></div>
     ${field(t('內容'), textarea('body', '', 'id="imp-body" class="code" rows="10" required'))}
     ${field(t('標題'), input('title', '', 'id="imp-title" required maxlength="40"'))}
-    <div class="field-pair">${field(t('模板'), select('template', tplOptions(), folderSetting(folder, 'defaultTemplate') || 'TPL-0001'))}${field(t('文件夾'), input('folder', folder || '', `list="folder-options" placeholder="${esc(t('留空則放在模板的預設文件夾'))}"`))}</div>`, {
+    <div class="field-pair">${field(t('模板'), select('template', tplOptions().filter(([id]) => !tplOf(id)?.generator), folderSetting(folder, 'defaultTemplate') || 'TPL-0001'))}${field(t('文件夾'), input('folder', folder || '', `list="folder-options" placeholder="${esc(t('留空則放在模板的預設文件夾'))}"`))}</div>`, {
     label: t('導入為草稿'),
     run: async () => {
       const d = formData($('#dialog-content'));
@@ -280,15 +292,53 @@ async function importDialog(folder) {
     const { title } = stripFrontMatter(text);
     if (title && !$('#imp-title').value) $('#imp-title').value = title.slice(0, 40);
   };
+  const state = (html, cls = '') => ($('#imp-state').innerHTML = html ? `<p class="notice ${cls}">${html}</p>` : '');
   $('#imp-file').onchange = async e => {
     const f = e.target.files[0];
     if (!f) return;
+    state('');
+    if (isOffice(f)) {
+      if (f.size > CONVERT_MAX) return state(esc(t('檔案超過 {n} MB', { n: 20 })), 'warn');
+      state(esc(t('正在把 {name} 轉成 Markdown…', { name: f.name })));
+      try {
+        const r = await convertFile(f);
+        $('#imp-body').value = r.body;
+        $('#imp-title').value = (r.title || f.name.replace(/\.[^.]+$/, '')).slice(0, 40);
+        state(`${esc(t('已從 {format} 轉換：{n} 個章節。請在編輯器中核對排版。', { format: r.format === 'pdf' ? 'PDF' : 'Word', n: (r.body.match(/^#{2,3}\s/gm) || []).length }))}${r.warnings?.length ? `<br>${r.warnings.map(esc).join('<br>')}` : ''}`, r.warnings?.length ? 'warn' : '');
+      } catch (err) { state(esc(err.message), 'warn'); }
+      return;
+    }
     if (f.size > 1024 * 1024) return toast(t('檔案超過 1 MB，請拆分成多篇文檔'));
     const text = await f.text();
     $('#imp-body').value = text;
     if (!$('#imp-title').value) $('#imp-title').value = (stripFrontMatter(text).title || f.name.replace(/\.[^.]+$/, '')).slice(0, 40);
   };
   $('#imp-body').addEventListener('change', e => fill(e.target.value));
+}
+
+/** AI 起草：選模板、寫要求、選主體；內容只取這些主體 L0、L1 的知識並附引用，結果是草稿。preset：{ template, folder, subjects }。 */
+export async function aiDraftDialog(preset = {}) {
+  await Promise.all([loadTemplates(), loadFolders(), loadLookups()]);
+  const opts = await ctx.subjectOptions();
+  const tpls = cache.templates.filter(x => !x.generator);
+  modal(t('AI 起草'), `${opts}${folderDatalist()}<p class="notice">${t('按模板起草一篇草稿：內容只取選中主體的 L0、L1 知識，每條後面附引用，L1 標註「未經驗證」。草稿標記為「AI 起草」，必須由人核對後發布。配置了 OpenRouter 時由模型組織文字，否則按章節把知識填進模板。')}</p>
+    ${field(t('模板'), select('template', tpls.map(x => [x.id, `${x.label}（${tv(x.purpose)}）`]), preset.template || folderSetting(preset.folder || '', 'defaultTemplate') || 'TPL-0001'))}
+    ${boxField(t('主體（1–10 個）'), chipBox('subjects', preset.subjects || [], 'subject-options', { ids: true, placeholder: t('輸入名稱或 ID') }))}
+    ${field(t('起草要求（選填）'), textarea('instruction', '', `rows="3" maxlength="1000" placeholder="${esc(t('例如：寫給新入職的運營同學，先講結論，再講例外情況'))}"`))}
+    <div class="field-pair">${field(t('標題（選填）'), input('title', '', `maxlength="40" placeholder="${esc(t('留空則用「主體名 + 模板名」'))}"`))}${field(t('文件夾'), input('folder', preset.folder || '', `list="folder-options" placeholder="${esc(t('留空則放在模板的預設文件夾'))}"`))}</div>
+    <label class="check"><input type="checkbox" name="templateOnly"> ${t('不調用模型，只按模板填入知識')}</label>`, {
+    label: t('起草'),
+    run: async () => {
+      const c = $('#dialog-content');
+      const d = formData(c);
+      const subjectIds = chipValues(c, 'subjects');
+      if (!subjectIds.length) throw new Error(t('至少選一個主體'));
+      const r = await post('/api/v1/docs/ai-draft', { template: d.template, subjectIds, instruction: d.instruction, title: d.title.trim() || undefined, folder: d.folder.trim() || undefined, compose: $('[name=templateOnly]', c).checked ? 'template' : 'auto' });
+      cache.docList = null;
+      toast(t('已起草 {id}（{how}）：請核對後再發布', { id: r.data.id, how: r.data.composer?.type === 'openrouter' ? `OpenRouter · ${r.data.composer.model}` : t('按模板填入') }), 6000);
+      location.hash = `doc-edit/${r.data.id}`;
+    }
+  });
 }
 
 function folderDialog({ folder = null, parent = '', onDone } = {}) {
@@ -338,7 +388,7 @@ async function pageLibrary() {
   let seq = 0;
 
   setHeading(t('文檔'), t('知識倉庫中的 Markdown 文檔。文件夾就是 Git 目錄；內容走版本，整理即時生效。'), `${t('文檔庫')} › ${t('文檔')}${st.folder ? ` › ${st.folder.split('/').join(' › ')}` : ''}`);
-  setActions(`<a class="button" id="docs-export" href="#">${t('導出 JSONL')}</a>${canWrite() ? `<button class="button" id="docs-import">${t('導入 Markdown')}</button><button class="button primary" id="docs-new">${t('+ 新建文檔')}</button>` : ''}`);
+  setActions(`<details class="menu"><summary class="button">${t('導出')}</summary><div class="menu-list"><a id="docs-export" href="#" download>${t('段級 JSONL（給 RAG）')}</a><a id="docs-export-zip" href="#" download>${t('Markdown 壓縮包')}</a></div></details>${canWrite() ? `<button class="button" id="docs-import">${t('導入')}</button><button class="button" id="docs-handbook">${t('生成手冊')}</button><button class="button" id="docs-ai">${t('AI 起草')}</button><button class="button primary" id="docs-new">${t('+ 新建文檔')}</button>` : ''}`);
   const statusOptions = [['', t('不含已廢止')], ['all', t('全部（含已廢止）')], ...(drafts ? [['草稿', tv('草稿')], ['待審', tv('待審')]] : []), ['已發布', tv('已發布')], ['已廢止', tv('已廢止')]];
   content().innerHTML = `<div class="docs-layout" id="docs-root">
     <aside class="panel docs-nav" id="docs-nav" aria-label="${esc(t('智能視圖與文件夾'))}"></aside>
@@ -363,6 +413,7 @@ async function pageLibrary() {
     const q = qs({ q: st.q, folder: st.folder, view: st.view, template: st.template, status: st.status, tag: st.tag, mode: st.mode === 'list' ? '' : st.mode, sel: st.sel });
     history.replaceState(null, '', `#docs${q ? `?${q}` : ''}`);
     $('#docs-export').href = `/api/v1/docs/export?${qs({ format: 'jsonl', folder: st.folder, tags: st.tag, template: st.template })}`;
+    $('#docs-export-zip').href = `/api/v1/docs/export?${qs({ format: 'zip', folder: st.folder, tags: st.tag, template: st.template, obsolete: st.status === 'all' || st.status === '已廢止' ? '1' : '' })}`;
   };
 
   // ---- 左欄：智能視圖與文件夾樹
@@ -702,6 +753,8 @@ async function pageLibrary() {
 
   $('#docs-new')?.addEventListener('click', () => openNewDoc({ folder: st.folder }).catch(showError));
   $('#docs-import')?.addEventListener('click', () => importDialog(st.folder).catch(showError));
+  $('#docs-ai')?.addEventListener('click', () => aiDraftDialog({ folder: st.folder }).catch(showError));
+  $('#docs-handbook')?.addEventListener('click', () => handbookDialog({ domain: folderSetting(st.folder, 'domain') || '' }).catch(showError));
   syncUrl();
   renderNav();
   renderSuggest();
@@ -779,9 +832,15 @@ async function publishDialog(d, { confirmGitEdit = false } = {}) {
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(x);
   }
-  const impactHtml = impact.items.length ? `<div class="impact-head"><span>${esc(t('以本文檔為依據的知識（{n}）', { n: impact.items.length }))} · ${esc(t('已勾選'))} <b id="pub-count">0</b></span> <button type="button" class="text-btn" data-all="1">${t('全選')}</button> <button type="button" class="text-btn" data-all="0">${t('全不選')}</button></div>${[...groups].map(([k, list]) => `<div class="impact-group"><h4>${esc(k)}</h4>${list.map(x => `<label class="impact-pick"><input type="checkbox" name="affect" value="${esc(x.id)}"><span class="mono">${esc(x.id)}</span><span class="grow">${esc(impactDesc(x))}</span>${level(x.level)}</label>`).join('')}</div>`).join('')}` : '';
+  const SECTION_CHANGE = { modified: tk('已修改'), removed: tk('已刪除'), added: tk('新增'), unchanged: tk('未改動'), missing: tk('章節已不存在') };
+  const secChip = x => (x.section ? ` <span class="badge ${x.sectionChange === 'unchanged' ? '' : 'amber'}" title="${esc(x.sourceRef || '')}">${esc(`§${x.section}`)} · ${esc(t(SECTION_CHANGE[x.sectionChange] || SECTION_CHANGE.missing))}</span>` : '');
+  const preselect = impact.sectionAware && impact.items.some(x => x.section);
+  const impactHtml = impact.items.length ? `<div class="impact-head"><span>${esc(t('以本文檔為依據的知識（{n}）', { n: impact.items.length }))} · ${esc(t('已勾選'))} <b id="pub-count">0</b></span> <button type="button" class="text-btn" data-all="1">${t('全選')}</button>${preselect ? ` <button type="button" class="text-btn" data-all="s">${t('只選受影響的')}</button>` : ''} <button type="button" class="text-btn" data-all="0">${t('全不選')}</button></div>${preselect ? `<p class="muted small">${esc(t('改動的章節：{list}。知識的 sourceRef 指向沒改的章節時不預選；沒有 sourceRef 的一律預選。', { list: impact.changedSections.map(x => `§${x.heading}（${t(SECTION_CHANGE[x.change])}）`).join(t('、')) || t('無') }))}</p>` : ''}${[...groups].map(([k, list]) => `<div class="impact-group"><h4>${esc(k)}</h4>${list.map(x => `<label class="impact-pick"><input type="checkbox" name="affect" value="${esc(x.id)}" data-suggested="${x.suggested === false ? '0' : '1'}"><span class="mono">${esc(x.id)}</span><span class="grow">${esc(impactDesc(x))}${secChip(x)}</span>${level(x.level)}</label>`).join('')}</div>`).join('')}` : '';
+  const editors = new Set([...(draft?.draft?.editors || d.draft?.editors || []).map(x => x?.id), d.draft?.updatedBy?.id, d.draft?.submittedBy?.id, first ? draft?.createdBy?.id || d.createdBy?.id : null].filter(Boolean));
+  const fourEyes = d.templateInfo?.requireOtherApprover && !confirmGitEdit ? `<p class="notice ${editors.has(me()?.id) ? 'warn' : ''}">${esc(editors.has(me()?.id) ? t('模板「{name}」要求四眼審閱：這一版有你參與編寫，需要另一位負責人發布。', { name: d.templateInfo.label || d.templateInfo.name }) : t('模板「{name}」要求四眼審閱：發布人不能是這一版的作者。', { name: d.templateInfo.label || d.templateInfo.name }))}</p>` : '';
   const bindHtml = impact.bindable.length ? `<h3 class="dialog-h">${t('關聯了、但還沒有以本文檔為依據的主體')}</h3>${impact.bindable.map(s => `<label class="check"><input type="checkbox" name="bind" value="${esc(s.id)}"> ${esc(t('為「{name} {id}」建立綁定（L1，之後由負責人確認或校驗到 L0）', { name: s.name, id: s.id }))}</label>`).join('')}` : '';
   modal(t('審閱並發布 {id} v{v}', { id: d.id, v: next }), `<div id="pub-root">
+    ${fourEyes}
     <div class="lint-line">${errors.length ? pill(t('體檢未通過'), 'red') : pill(t('體檢通過'), 'green')} <span class="muted">${esc(t('{e} 個錯誤 · {w} 個提醒', { e: errors.length, w: problems.length - errors.length }))}</span></div>
     ${problems.length ? `<ul class="lint-list compact">${problems.slice(0, 8).map(p => problemLi(p)).join('')}</ul>` : ''}
     ${!first && !confirmGitEdit ? `<details class="pub-diff" id="pub-diff"><summary>${t('查看本次差異')}</summary><div id="pub-diff-body"><p class="muted">${t('載入中…')}</p></div></details>` : ''}
@@ -818,12 +877,12 @@ async function publishDialog(d, { confirmGitEdit = false } = {}) {
     ].filter(Boolean).join(' ');
   };
   c.addEventListener('change', e => {
-    if (e.target.name === 'major') $$('[name=affect]', c).forEach(x => (x.checked = e.target.value === '1'));
+    if (e.target.name === 'major') $$('[name=affect]', c).forEach(x => (x.checked = e.target.value === '1' && x.dataset.suggested !== '0'));
     update();
   });
   c.addEventListener('click', e => {
     const all = e.target.closest('[data-all]');
-    if (all) { $$('[name=affect]', c).forEach(x => (x.checked = all.dataset.all === '1')); update(); }
+    if (all) { $$('[name=affect]', c).forEach(x => (x.checked = all.dataset.all === '1' || (all.dataset.all === 's' && x.dataset.suggested !== '0'))); update(); }
     if (e.target.id === 'pub-reject') rejectDialog(d);
   });
   $('#pub-diff')?.addEventListener('toggle', async e => {
@@ -832,6 +891,85 @@ async function publishDialog(d, { confirmGitEdit = false } = {}) {
     try { $('#pub-diff-body').innerHTML = diffHtml(await get(`/api/v1/docs/${enc(d.id)}/diff`), tplOf(d.template)); } catch (err) { $('#pub-diff-body').innerHTML = `<p class="notice warn">${esc(err.message)}</p>`; }
   });
   update();
+}
+
+// ------------------------------------------------------------------ 從文檔提取斷言
+const ASSERTION_KEYS = ['定義', '規則', '約束', '屬性'];
+
+/** 提取斷言對話框：items 是建議（可改主體、類型、內容）；勾選的寫入為 L1 斷言，證據是文檔客體，一次提交。 */
+async function extractDialog(d, items, { title, note } = {}) {
+  await loadLookups();
+  const opts = await ctx.subjectOptions();
+  const row = (x, i) => `<div class="extract-row" data-i="${i}">
+    <label class="check"><input type="checkbox" name="pick" ${x.exists ? '' : 'checked'}> <span class="muted small">${x.heading ? esc(`§${x.heading}`) : esc(t('（文首）'))}${x.exists ? ` · ${esc(t('已有相同內容的斷言'))}` : ''}</span></label>
+    <div class="extract-grid">
+      <input name="subject" list="subject-options" value="${esc(x.subjectId ? `${x.subjectId} ${x.subjectName || nameOf(x.subjectId) || ''}`.trim() : '')}" placeholder="${esc(t('主體（名稱或 ID）'))}" aria-label="${esc(t('主體'))}">
+      ${select('type', ASSERTION_KEYS.map(k => [k, tv(k)]), x.type || '屬性', `aria-label="${esc(t('類型'))}"`)}
+    </div>
+    <textarea name="content" rows="2" maxlength="500" aria-label="${esc(t('內容'))}">${esc(x.content)}</textarea>
+  </div>`;
+  modal(title || t('提取為斷言 · {id}', { id: d.id }), `${opts}<p class="notice">${esc(note || t('勾選的內容寫入為斷言：證據是本文檔的客體 {obj}，sourceRef 寫「{id}§章節 v{v}」。寫入後是 L1（未經驗證），要到 L0 仍需校驗或負責人確認。', { obj: d.objectId || '—', id: d.id, v: d.version }))}</p>
+    ${items.length ? `<div class="extract-list" id="extract-list">${items.map(row).join('')}</div>` : `<p class="muted">${t('沒有找到可提取的陳述。可以在正文中選中一段文字，點「提取為斷言」。')}</p>`}`, items.length ? {
+    label: t('寫入斷言'),
+    run: async () => {
+      const picked = $$('#extract-list .extract-row').filter(r => $('[name=pick]', r).checked).map(r => {
+        const x = items[Number(r.dataset.i)];
+        return { subjectId: parseId($('[name=subject]', r).value), type: $('[name=type]', r).value, content: $('[name=content]', r).value.trim(), anchor: x.anchor || undefined };
+      });
+      if (!picked.length) throw new Error(t('沒有勾選要寫入的內容'));
+      const bad = picked.findIndex(x => !x.subjectId || !x.content);
+      if (bad >= 0) throw new Error(t('第 {n} 條缺少主體或內容', { n: bad + 1 }));
+      const r = await post(`/api/v1/docs/${enc(d.id)}/extract`, { items: picked });
+      toast(t('已寫入 {n} 條斷言（L1）{skip}', { n: r.data.created.length, skip: r.data.skipped.length ? t('，跳過 {n} 條重複', { n: r.data.skipped.length }) : '' }), 6000);
+      go(`doc/${d.id}`);
+    }
+  } : null);
+}
+
+/** 按章節建議斷言：規則或模型從已發布的正文中找出陳述，猜主體和類型；在對話框中改好再寫入。 */
+async function suggestDialog(d, { anchor } = {}) {
+  toast(t('正在分析正文…'));
+  const r = (await post(`/api/v1/docs/${enc(d.id)}/extract-suggestions`, { anchor, compose: 'auto' })).data;
+  const how = r.composer?.type === 'openrouter' ? `OpenRouter · ${r.composer.model}` : t('按句式規則');
+  return extractDialog(d, r.items, { title: t('建議斷言 · {id}（{n} 條）', { id: d.id, n: r.items.length }), note: t('以下是從 v{v} 正文中找出的陳述（{how}），請逐條核對主體、類型和內容；默認不勾選已經有的。寫入後是 L1，證據是文檔客體 {obj}。', { v: r.version, how, obj: r.objectId || '—' }) });
+}
+
+/** 正文中選中一段文字：浮出「提取為斷言」。 */
+function bindSelectionExtract(d) {
+  const prose = $('#doc-prose');
+  if (!prose) return;
+  let pop = null;
+  const hide = () => { pop?.remove(); pop = null; };
+  const sectionOf = node => {
+    let anchor = '';
+    for (const h of $$('[data-anchor]', prose)) if (h.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING) anchor = h.dataset.anchor;
+    return anchor;
+  };
+  prose.addEventListener('mouseup', () => setTimeout(() => {
+    const sel = window.getSelection();
+    const text = sel && !sel.isCollapsed ? sel.toString().replace(/\s+/g, ' ').trim() : '';
+    hide();
+    if (!text || text.length < 4 || !prose.contains(sel.anchorNode)) return;
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    const anchor = sectionOf(sel.anchorNode);
+    pop = document.createElement('button');
+    pop.type = 'button';
+    pop.className = 'button primary extract-pop';
+    pop.textContent = t('提取為斷言');
+    pop.style.top = `${window.scrollY + rect.bottom + 6}px`;
+    pop.style.left = `${Math.max(8, window.scrollX + rect.left)}px`;
+    pop.onmousedown = e => e.preventDefault();
+    pop.onclick = async () => {
+      hide();
+      try {
+        const r = (await post(`/api/v1/docs/${enc(d.id)}/extract-suggestions`, { text: text.slice(0, 1000), anchor: anchor || undefined, compose: 'template' })).data;
+        await extractDialog(d, r.items.length ? r.items : [{ anchor, heading: '', subjectId: d.subjects?.[0] || null, type: '屬性', content: text.slice(0, 500) }]);
+      } catch (err) { showError(err); }
+    };
+    document.body.appendChild(pop);
+  }, 0));
+  document.addEventListener('mousedown', e => { if (pop && e.target !== pop) hide(); }, { once: false });
+  window.addEventListener('hashchange', hide, { once: true });
 }
 
 function rejectDialog(d) {
@@ -848,15 +986,18 @@ async function obsoleteDialog(d) {
   const candidates = [...cache.docList.values()].filter(x => x.id !== d.id && x.status === '已發布');
   modal(t('廢止 {id}', { id: d.id }), `<p class="notice warn">${esc(t('廢止後文檔仍可閱讀，但不能再修訂。它的客體 {obj} 下線：{b} 個綁定轉為 E1，{n} 條以它為證據的知識降為 L1 並排入重驗。', { obj: d.objectId || '—', b: bindings, n: others }))}</p>
     ${field(t('廢止原因'), textarea('reason', '', 'required'))}
-    ${field(t('替代文檔（選填）'), select('replacedBy', [['', '—'], ...candidates.map(x => [x.id, `${x.id} ${x.title}`])]))}`, {
+    ${field(t('替代文檔（選填）'), select('replacedBy', [['', '—'], ...candidates.map(x => [x.id, `${x.id} ${x.title}`])], '', 'id="obs-replace"'))}
+    <label class="check" id="obs-migrate-row" hidden><input type="checkbox" name="migrate" checked> ${esc(t('把依據遷移到替代文檔：為 {b} 個綁定了本文檔的主體綁定替代文檔的客體（L1，等待確認或校驗）', { b: bindings }))}</label>`, {
     label: t('確認廢止'),
     run: async () => {
-      const r = await post(`/api/v1/docs/${enc(d.id)}/obsolete`, formData($('#dialog-content')));
-      toast(t('{id} 已廢止；{b} 個綁定轉為 E1，{n} 條知識降為 L1', { id: d.id, b: r.data.affected?.bindings?.length || 0, n: r.data.affected?.demoted?.length || 0 }), 6000);
+      const f = formData($('#dialog-content'));
+      const r = await post(`/api/v1/docs/${enc(d.id)}/obsolete`, { reason: f.reason, replacedBy: f.replacedBy || undefined, migrate: !!f.replacedBy && f.migrate });
+      toast(t('{id} 已廢止；{b} 個綁定轉為 E1，{n} 條知識降為 L1', { id: d.id, b: r.data.affected?.bindings?.length || 0, n: r.data.affected?.demoted?.length || 0 }) + (r.data.migrated?.length ? t('；{n} 個主體改為以 {id} 為依據', { n: r.data.migrated.length, id: r.data.replacedBy }) : ''), 6000);
       cache.docList = null;
       go(`doc/${d.id}`);
     }
   });
+  $('#obs-replace').onchange = e => ($('#obs-migrate-row').hidden = !e.target.value || !bindings);
 }
 
 async function organizeDialog(d) {
@@ -928,10 +1069,14 @@ async function pageDoc({ param }) {
   document.title = `${d.title} · ${ctx.title}`;
   const obsolete = d.status === '已廢止';
   const immutableNow = tpl?.immutable && d.version;
-  const editable = canWrite() && !obsolete && !historical && !(immutableNow && !d.draft);
+  const generated = !!d.generated;
+  const editable = canWrite() && !obsolete && !historical && !generated && !(immutableNow && !d.draft);
+  const extractable = canWrite() && published && !historical && !obsolete && !generated && d.object && d.object.status !== '下線';
   const editLabel = !d.version ? t('編輯草稿') : d.draft ? t('繼續修訂') : t('修訂');
   const more = [];
-  if (canWrite() && !obsolete) more.push(`<button type="button" data-act="copy">${t('複製為新文檔')}</button>`);
+  if (generated && canWrite() && !obsolete && !historical) more.push(`<button type="button" data-act="regenerate">${t('重新生成')}</button>`);
+  if (extractable) more.push(`<button type="button" data-act="suggest">${t('建議斷言')}</button>`);
+  if (canWrite() && !obsolete && !generated) more.push(`<button type="button" data-act="copy">${t('複製為新文檔')}</button>`);
   if (d.draft && canWrite()) more.push(`<button type="button" data-act="discard">${d.version ? t('丟棄修訂') : t('刪除草稿')}</button>`);
   if (d.version && !obsolete && isReviewer(d)) more.push(`<button type="button" data-act="obsolete" class="danger-text">${t('廢止')}</button>`);
   if (me()?.isAdmin) more.push(`<button type="button" data-act="remove" class="danger-text">${t('刪除（管理員）')}</button>`);
@@ -940,7 +1085,15 @@ async function pageDoc({ param }) {
   // ---- 提示條
   const notes = [];
   if (historical) notes.push(`<div class="notice">${esc(t('你在看歷史版本 v{v}；當前版本是 v{cur}。', { v: d.version, cur: d.nextVersion - 1 }))} <a href="#doc/${esc(d.id)}">${t('回到當前版本')}</a> · <a href="#doc/${esc(d.id)}?diff=${esc(d.nextVersion - 1)}">${t('看之後的改動')}</a></div>`);
-  if (obsolete) notes.push(`<div class="notice warn">${esc(t('已廢止（{date}）：{reason}', { date: day(d.obsoleteAt), reason: d.obsoleteReason || '—' }))}${d.replacedBy ? ` ${t('替代文檔：')}${refChip(d.replacedBy)}` : ''}</div>`);
+  if (obsolete) notes.push(`<div class="notice warn">${esc(t('已廢止（{date}）：{reason}', { date: day(d.obsoleteAt), reason: d.obsoleteReason || '—' }))}${d.replacedBy ? ` ${t('替代文檔：')}${refChip(d.replacedBy)}` : ''}${d.replacedBy && isReviewer(d) && !historical ? ` · <button type="button" class="text-btn" data-act="migrate">${t('把依據遷移到替代文檔')}</button>` : ''}</div>`);
+  if (generated && !historical) {
+    const g = d.generated;
+    const target = g.kind === 'domain' ? esc(t('領域 {code}', { code: g.target })) : refChip(g.target);
+    const state = g.missing ? t('生成來源已不存在。') : g.stale ? t('知識在 {date} 之後有變化，手冊已落後。', { date: day(g.at) }) : t('與當前知識一致（{date} 生成）。', { date: day(g.at) });
+    notes.push(`<div class="notice${g.stale || g.missing ? ' warn' : ''}">${esc(t('由知識生成的手冊，正文只讀，不作為知識的證據。'))} ${target} · ${esc(state)}${canWrite() && !obsolete && !g.missing ? ` <button type="button" class="text-btn" data-act="regenerate">${t('重新生成')}</button>` : ''}</div>`);
+  }
+  const aiDraft = d.side === 'draft' ? d.aiDraft || d.draft?.aiDraft : d.draft?.aiDraft;
+  if (aiDraft && canWrite() && (draftMode || !d.version)) notes.push(`<div class="notice">${esc(t('AI 起草（{how}，{date}）：內容取自 {subjects} 的 L0、L1 知識。發布前請逐條核對引用，刪掉不需要的內容。', { how: aiDraft.composer === 'openrouter' ? `OpenRouter · ${aiDraft.model || ''}` : t('按模板填入'), date: day(aiDraft.at), subjects: (aiDraft.subjects || []).map(id => nameOf(id) || id).join(t('、')) }))}${aiDraft.instruction ? `<br><span class="muted">${esc(t('起草要求：{text}', { text: aiDraft.instruction }))}</span>` : ''}</div>`);
   if (draftMode) notes.push(`<div class="notice">${t('你在看修訂草稿，尚未發布；讀者看到的仍是已發布版本。')} <a href="#doc/${esc(d.id)}">${t('看已發布版本')}</a></div>`);
   if (d.draft && d.version && !draftMode && !historical && canWrite()) {
     const text = d.draft.status === '待審' ? t('有一份修訂待審閱：v{v} 草稿由 {who} 於 {time} 提交。', { v: d.nextVersion, who: who(d.draft.submittedBy || d.draft.updatedBy), time: fmtTime(d.draft.submittedAt || d.draft.updatedAt) }) : t('有一份修訂正在進行：v{v} 草稿由 {who} 最後修改於 {time}。', { v: d.nextVersion, who: who(d.draft.updatedBy), time: fmtTime(d.draft.updatedAt) });
@@ -970,6 +1123,8 @@ async function pageDoc({ param }) {
       ${panel(t('版本'), `<div class="panel-body">${timelineHtml(d, history, { compact: true })}</div>`, `<button type="button" class="text-btn" data-act="history">${t('比較')}</button>`)}
     </aside></div></div>`;
 
+  if (extractable) bindSelectionExtract(d);
+
   // 章節錨點：複製鏈接
   for (const h of $$('#doc-prose [data-anchor]')) h.insertAdjacentHTML('beforeend', ` <button type="button" class="anchor-link" data-anchor-copy="${esc(h.dataset.anchor)}" title="${esc(t('複製本節鏈接'))}" aria-label="${esc(t('複製本節鏈接'))}">#</button>`);
   if (anchor) document.getElementById(`sec-${anchor}`)?.scrollIntoView({ block: 'start' });
@@ -994,6 +1149,17 @@ async function pageDoc({ param }) {
       case 'obsolete': return obsoleteDialog(d);
       case 'remove': return modal(t('刪除 {id}', { id: d.id }), `<p class="notice warn">${t('刪除會移除檔案（Git 歷史仍保留），客體不再由文檔庫管理。正常情況請用「廢止」。')}</p>`, { label: t('確認刪除'), run: async () => { await del(`/api/v1/docs/${enc(d.id)}`); toast(t('已刪除')); cache.docList = null; location.hash = 'docs'; } });
       case 'publish': return publishDialog(d);
+      case 'regenerate': {
+        const r = await post(`/api/v1/docs/${enc(d.id)}/regenerate`);
+        toast(r.data.changed ? t('已重新生成 {id} v{v}', { id: d.id, v: r.data.version }) : t('知識沒有變化，手冊不變'));
+        return go(`doc/${d.id}`);
+      }
+      case 'suggest': return suggestDialog(d);
+      case 'migrate': {
+        const r = await post(`/api/v1/docs/${enc(d.id)}/migrate-basis`);
+        toast(t('已為 {n} 個主體綁定替代文檔 {id}（L1，等待確認或校驗）', { n: r.data.migrated.length, id: r.data.replacedBy }), 6000);
+        return go(`doc/${d.id}`);
+      }
       case 'confirm-git': return publishDialog(d, { confirmGitEdit: true });
       case 'submit': await post(`/api/v1/docs/${enc(d.id)}/submit`); toast(t('已提交審閱')); return go(`doc/${d.id}`);
       case 'diff-draft': return historyDialog(d, history, { diff: 'draft' });
@@ -1378,7 +1544,7 @@ async function pageTemplates() {
   const list = await loadTemplates(true);
   const purposes = ctx.schema()?.docs?.purposes || {};
   setActions(isOwner() ? `<button class="button" id="tpl-new">${t('新增模板')}</button>` : '');
-  content().innerHTML = `<div class="stack" id="tpl-root">${['知識', '管理'].map(g => panel(esc(t('{purpose}文檔（{n}）', { purpose: tv(g), n: list.filter(x => x.purpose === g).length })), `${purposes[g]?.desc ? `<p class="panel-note muted">${esc(purposes[g].desc)}</p>` : ''}${table(['ID', t('名稱'), t('發布'), t('複審'), t('欄位'), t('章節（必填）'), t('預設文件夾'), '#' + t('使用'), t('操作')], list.filter(x => x.purpose === g).map(x => `<tr><td>${esc(x.id)}</td><td class="wrap"><strong>${esc(x.label)}</strong><span class="cell-sub">${esc(x.descriptionText || '')}</span></td><td>${x.approval === 'owner' ? pill(t('負責人審閱'), 'amber') : pill(t('貢獻者直接發布'), 'green')}${x.immutable ? ` ${pill(t('不可修訂'))}` : ''}</td><td>${x.reviewEveryDays ? esc(t('每 {n} 天', { n: x.reviewEveryDays })) : '—'}</td><td class="wrap-sm">${x.fields.map(f => esc(f.labelText)).join(t('、')) || '—'}</td><td class="wrap-sm">${esc(t('{n} 節（{r}）', { n: x.sections.length, r: x.sections.filter(s => s.required).length }))}</td><td>${esc(x.defaultFolder || '—')}</td><td class="numeric">${x.usage}</td><td><div class="cell-actions"><button type="button" class="text-btn" data-tpl-view="${esc(x.id)}">${t('查看')}</button>${canWrite() ? `<button type="button" class="text-btn" data-tpl-new="${esc(x.id)}">${t('用它新建')}</button>` : ''}${isOwner() ? `<button type="button" class="text-btn" data-tpl-edit="${esc(x.id)}">${t('編輯')}</button>` : ''}</div></td></tr>`), t('沒有模板'))}`)).join('')}</div>`;
+  content().innerHTML = `<div class="stack" id="tpl-root">${['知識', '管理'].map(g => panel(esc(t('{purpose}文檔（{n}）', { purpose: tv(g), n: list.filter(x => x.purpose === g).length })), `${purposes[g]?.desc ? `<p class="panel-note muted">${esc(purposes[g].desc)}</p>` : ''}${table(['ID', t('名稱'), t('發布'), t('複審'), t('欄位'), t('章節（必填）'), t('預設文件夾'), '#' + t('使用'), t('操作')], list.filter(x => x.purpose === g).map(x => `<tr><td>${esc(x.id)}</td><td class="wrap"><strong>${esc(x.label)}</strong><span class="cell-sub">${esc(x.descriptionText || '')}</span></td><td>${x.generator ? pill(t('由知識生成'), 'blue') : x.approval === 'owner' ? pill(t('負責人審閱'), 'amber') : pill(t('貢獻者直接發布'), 'green')}${x.requireOtherApprover ? ` ${pill(t('四眼審閱'), 'amber')}` : ''}${x.immutable ? ` ${pill(t('不可修訂'))}` : ''}</td><td>${x.reviewEveryDays ? esc(t('每 {n} 天', { n: x.reviewEveryDays })) : '—'}</td><td class="wrap-sm">${x.fields.map(f => esc(f.labelText)).join(t('、')) || '—'}</td><td class="wrap-sm">${esc(t('{n} 節（{r}）', { n: x.sections.length, r: x.sections.filter(s => s.required).length }))}</td><td>${esc(x.defaultFolder || '—')}</td><td class="numeric">${x.usage}</td><td><div class="cell-actions"><button type="button" class="text-btn" data-tpl-view="${esc(x.id)}">${t('查看')}</button>${canWrite() && !x.generator ? `<button type="button" class="text-btn" data-tpl-new="${esc(x.id)}">${t('用它新建')}</button>` : ''}${isOwner() ? `<button type="button" class="text-btn" data-tpl-edit="${esc(x.id)}">${t('編輯')}</button>` : ''}</div></td></tr>`), t('沒有模板'))}`)).join('')}</div>`;
   $('#tpl-root').addEventListener('click', e => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -1393,7 +1559,7 @@ async function templateDialog(id) {
   const r = await post(`/api/v1/doc-templates/${enc(id)}/render`, {});
   const x = r.data.template;
   modal(`${x.id} ${x.label}`, `<p class="notice">${esc(x.descriptionText || '')}</p>
-    <dl class="kv" style="margin-top:10px"><dt>${t('類別')}</dt><dd>${esc(t('{purpose}文檔', { purpose: tv(x.purpose) }))}</dd><dt>${t('發布')}</dt><dd>${esc(t(APPROVAL_TEXT[x.approval] || ''))}${x.immutable ? ` · ${esc(t('發布後不可修訂'))}` : ''}</dd><dt>${t('複審')}</dt><dd>${x.reviewEveryDays ? esc(t('每 {n} 天', { n: x.reviewEveryDays })) : '—'}</dd><dt>${t('客體種類')}</dt><dd>${esc(tv(x.objectKind) || '—')}</dd><dt>${t('預設文件夾')}</dt><dd>${esc(x.defaultFolder || '—')}</dd></dl>
+    <dl class="kv" style="margin-top:10px"><dt>${t('類別')}</dt><dd>${esc(t('{purpose}文檔', { purpose: tv(x.purpose) }))}</dd><dt>${t('發布')}</dt><dd>${x.generator ? esc(t('由知識生成，直接發布；正文只讀')) : esc(t(APPROVAL_TEXT[x.approval] || ''))}${x.requireOtherApprover ? ` · ${esc(t('四眼審閱：發布人不能是這一版的作者'))}` : ''}${x.immutable ? ` · ${esc(t('發布後不可修訂'))}` : ''}</dd><dt>${t('複審')}</dt><dd>${x.reviewEveryDays ? esc(t('每 {n} 天', { n: x.reviewEveryDays })) : '—'}</dd><dt>${t('客體種類')}</dt><dd>${esc(tv(x.objectKind) || '—')}</dd><dt>${t('預設文件夾')}</dt><dd>${esc(x.defaultFolder || '—')}</dd></dl>
     <h3 class="dialog-h">${t('欄位')}</h3>${table(['key', t('名稱'), t('類型'), t('必填'), t('說明')], x.fields.map(f => `<tr><td class="mono">${esc(f.key)}</td><td>${esc(f.labelText)}</td><td>${esc(t(FIELD_TYPE_TEXT[f.type] || f.type))}</td><td>${f.required ? t('是') : ''}</td><td class="wrap-sm">${[f.options ? Object.values(f.optionLabels || {}).join(' / ') : '', f.subjectTypes?.length ? f.subjectTypes.map(s => tv(s)).join(' / ') : '', f.link ? t('自動關聯') : ''].filter(Boolean).map(esc).join(' · ')}</td></tr>`), t('沒有欄位'))}
     <h3 class="dialog-h">${t('章節')}</h3>${table([t('章節'), t('必填'), t('提示')], x.sections.map(s => `<tr><td>${esc(s.headingText)}</td><td>${s.required ? t('是') : ''}</td><td class="wrap">${esc(s.guidanceText || '')}</td></tr>`))}
     <h3 class="dialog-h">${t('生成的正文骨架')}</h3><pre class="mono-block">${esc(r.data.body)}</pre>`);
@@ -1458,8 +1624,35 @@ async function pageTags() {
 // ------------------------------------------------------------------ 其他頁面用到的部件
 /** 主體頁「相關文檔」面板。 */
 export function subjectDocsPanel(s, docs = []) {
-  const rows = docs.map(d => `<tr><td>${idLink(d.id)}</td><td class="wrap"><a href="#doc/${esc(d.id)}">${esc(d.title)}</a><span class="cell-sub">${esc(tplLabel(d.template, d.templateName))} · ${esc(d.folder)}</span></td><td>${d.relation === 'binding' ? `${pill(t('以它為依據'), 'blue')} ${level(d.level)}` : pill(t('提到它'))}</td><td>${statusBadges(d, { review: false })}</td></tr>`);
-  return panel(t('相關文檔（{n}）', { n: docs.length }), table(['ID', t('標題'), t('關係'), t('狀態')], rows, t('還沒有文檔關聯這個主體')), canWrite() ? `<button type="button" class="text-btn" id="write-doc" data-subject="${esc(s.id)}" data-domain="${esc(s.domain || '')}">${t('為這個主體寫文檔')}</button>` : '');
+  const rows = docs.map(d => `<tr><td>${idLink(d.id)}</td><td class="wrap"><a href="#doc/${esc(d.id)}">${esc(d.title)}</a><span class="cell-sub">${esc(tplLabel(d.template, d.templateName))} · ${esc(d.folder)}</span></td><td>${d.generated ? pill(t('生成的手冊'), 'blue') : d.relation === 'binding' ? `${pill(t('以它為依據'), 'blue')} ${level(d.level)}` : pill(t('提到它'))}</td><td>${statusBadges(d, { review: false })}</td></tr>`);
+  const handbook = docs.find(d => d.generated);
+  const acts = canWrite() ? `<button type="button" class="text-btn" id="gen-handbook" data-subject="${esc(s.id)}">${handbook ? t('重新生成手冊') : t('生成主體手冊')}</button><button type="button" class="text-btn" id="ai-doc" data-subject="${esc(s.id)}">${t('AI 起草')}</button><button type="button" class="text-btn" id="write-doc" data-subject="${esc(s.id)}" data-domain="${esc(s.domain || '')}">${t('為這個主體寫文檔')}</button>` : '';
+  return panel(t('相關文檔（{n}）', { n: docs.length }), table(['ID', t('標題'), t('關係'), t('狀態')], rows, t('還沒有文檔關聯這個主體')), acts ? `<div class="cell-actions">${acts}</div>` : '');
+}
+
+/** 生成手冊對話框：一個主體的主體手冊，或一個領域的領域手冊。 */
+async function handbookDialog(preset = {}) {
+  const opts = await ctx.subjectOptions();
+  const domains = ctx.schema()?.domains || [];
+  modal(t('從知識生成手冊'), `${opts}<p class="notice">${t('把知識卡渲染成可讀的手冊：主體手冊列出一個主體的定義、斷言、關係、客體與依據、相關文檔和可用 Action；領域手冊列出一個領域所有主體的定義和關鍵知識。手冊直接發布、正文只讀，知識變化後可以重新生成；它不作為知識的證據。')}</p>
+    <div class="radio-cards"><label class="radio-card"><input type="radio" name="kind" value="subject" ${preset.domain ? '' : 'checked'}><span><strong>${t('主體手冊')}</strong><small>${t('一個主體的完整知識')}</small></span></label><label class="radio-card"><input type="radio" name="kind" value="domain" ${preset.domain ? 'checked' : ''}><span><strong>${t('領域手冊')}</strong><small>${t('一個領域的主體一覽')}</small></span></label></div>
+    <div class="field-pair">${field(t('主體'), input('subject', preset.subject || '', `list="subject-options" placeholder="${esc(t('名稱或 ID'))}"`))}${field(t('領域'), select('domain', domains.map(d => [d.code, `${d.code} ${tv(d.name)}`]), preset.domain || domains[0]?.code || ''))}</div>`, {
+    label: t('生成'),
+    run: async () => {
+      const d = formData($('#dialog-content'));
+      const kind = $('[name=kind]:checked', $('#dialog-content'))?.value;
+      if (kind === 'subject' && !parseId(d.subject)) throw new Error(t('請選一個主體'));
+      await generateHandbook(kind === 'domain' ? { domain: d.domain } : { subjectId: parseId(d.subject) });
+    }
+  });
+}
+
+/** 生成或重新生成手冊（主體或領域），完成後打開手冊。 */
+async function generateHandbook(body) {
+  const r = await post('/api/v1/docs/generate', body);
+  cache.docList = null;
+  toast(r.data.created ? t('已生成 {id}《{title}》', { id: r.data.id, title: r.data.title }) : r.data.changed ? t('已重新生成 {id} v{v}', { id: r.data.id, v: r.data.version }) : t('知識沒有變化，手冊不變'));
+  location.hash = `doc/${r.data.id}`;
 }
 
 /** 客體頁：由文檔庫管理的提示與相關文檔。 */
@@ -1483,9 +1676,35 @@ export function docNoteHtml(note) {
   return text.replace(/(DOC-\d+) v(\d+)/, (m, id, v) => `<a href="#doc/${id}?diff=${v}">${id} v${v}</a>`);
 }
 
+// ------------------------------------------------------------------ 全局搜索（主體和文檔一起搜）
+const MATCH_TEXT = { name: tk('名稱'), alias: tk('別名'), tag: tk('標籤'), definition: tk('定義'), tokens: tk('相關詞') };
+async function pageSearch() {
+  const q = (hashParams().get('q') || '').trim();
+  setActions('');
+  $('#top-q') && ($('#top-q').value = q);
+  if (!q) {
+    content().innerHTML = `<div class="panel panel-body"><form id="search-form" class="toolbar"><label class="grow"><input id="search-q" type="search" placeholder="${esc(t('輸入名稱、別名、ID 或任意文字，例如 ATP、盤點'))}" aria-label="${esc(t('搜索'))}"></label><button class="button primary">${t('搜索')}</button></form></div>`;
+    $('#search-form').onsubmit = e => { e.preventDefault(); const v = $('#search-q').value.trim(); if (v) location.hash = `search?q=${enc(v)}`; };
+    $('#search-q').focus();
+    return;
+  }
+  setHeading(t('搜索：{q}', { q }), t('主體和文檔一起搜：名稱、別名、ID、定義，以及文檔的標題、摘要、標籤和正文。'), `${t('總覽')} › ${t('全局搜索')}`);
+  const r = await get(`/api/v1/search?${qs({ q, limit: 20 })}`);
+  await loadTemplates();
+  const terms = r.terms || [];
+  const subjRows = r.subjects.map(s => `<tr><td>${idLink(s.id)}</td><td class="wrap"><a href="#subject/${esc(s.id)}"><strong>${highlight(s.name, [q.toLowerCase(), ...terms])}</strong></a>${s.definition ? `<span class="cell-sub">${highlight(s.definition, [q.toLowerCase(), ...terms])}</span>` : ''}${s.aliases?.length ? `<span class="cell-sub">${esc(t('別名：{list}', { list: s.aliases.join(t('、')) }))}</span>` : ''}</td><td>${vpill(s.type)}</td><td>${esc(s.domain || '')}</td><td>${level(s.level)}</td><td class="numeric">${s.assertions}</td><td class="numeric">${s.documents}</td><td>${pill(t(MATCH_TEXT[s.match?.field] || s.match?.field || ''))}${s.match?.text ? ` <small class="muted">${esc(s.match.text)}</small>` : ''}</td></tr>`);
+  const docRows = r.documents.map(d => `<div class="search-doc"><div><a href="${hrefOfDoc(d.id, d.match?.anchor)}"><strong>${highlight(d.title, terms)}</strong></a> <span class="mono muted small">${esc(d.id)}</span> ${statusBadges(d, { review: false })}${d.generated ? ` ${pill(t('生成的手冊'), 'blue')}` : ''}</div><div class="muted small">${esc(tplLabel(d.template))} · ${esc(d.folder)}${d.match?.heading ? ` · §${esc(d.match.heading)}` : ''}</div>${d.match?.snippet ? `<p class="search-snippet">${highlight(d.match.snippet, terms)}</p>` : d.summary ? `<p class="search-snippet">${highlight(d.summary, terms)}</p>` : ''}${d.tags?.length ? `<div class="chip-row">${tagsHtml(d.tags)}</div>` : ''}</div>`);
+  const amb = r.resolved?.ambiguous?.length ? `<p class="notice warn">${esc(r.resolved.ambiguous.map(a => t('「{term}」是多義別名：{list}', { term: a.term, list: a.candidates.join(t('、')) })).join(t('；')))}</p>` : '';
+  content().innerHTML = `${amb}<div class="stack">
+    ${panel(t('主體（{n}）', { n: r.subjectTotal }), table(['ID', t('名稱 / 定義'), t('類型'), t('領域'), t('綜合層級'), '#' + t('斷言'), '#' + t('文檔'), t('命中')], subjRows, t('沒有匹配的主體')), r.subjectTotal > r.subjects.length ? `<a class="text-btn" href="#subjects?q=${enc(q)}">${t('全部 {n} 個', { n: r.subjectTotal })}</a>` : '')}
+    ${panel(t('文檔（{n}）', { n: r.documentTotal }), docRows.length ? `<div class="panel-body search-docs">${docRows.join('')}</div>` : `<p class="panel-body muted">${t('沒有匹配的文檔')}</p>`, `<a class="text-btn" href="#docs?q=${enc(q)}">${t('在文檔庫中搜索')}</a>`)}
+  </div>`;
+}
+
 // ------------------------------------------------------------------ 註冊
 export function registerDocPages(PAGES, context) {
   ctx = context;
+  PAGES.search = pageSearch;
   PAGES.docs = pageLibrary;
   PAGES.doc = pageDoc;
   PAGES['doc-edit'] = pageEdit;
@@ -1495,6 +1714,10 @@ export function registerDocPages(PAGES, context) {
   document.addEventListener('click', e => {
     const b = e.target.closest('#write-doc');
     if (b) openNewDoc({ subjects: [b.dataset.subject], domain: b.dataset.domain || undefined }).catch(showError);
+    const g = e.target.closest('#gen-handbook');
+    if (g) generateHandbook({ subjectId: g.dataset.subject }).catch(showError);
+    const ai = e.target.closest('#ai-doc');
+    if (ai) aiDraftDialog({ subjects: [ai.dataset.subject] }).catch(showError);
     // 點選選單外時收起下拉選單
     if (!e.target.closest('details.menu')) $$('details.menu[open]').forEach(x => x.removeAttribute('open'));
   });

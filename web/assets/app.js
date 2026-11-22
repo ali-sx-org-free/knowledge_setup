@@ -16,6 +16,7 @@ const NAV = {
   groups: [
     { id: 'overview', name: t('總覽'), en: 'OVERVIEW', icon: 'chart', pages: [
       { id: 'dashboard', name: t('健康指標'), desc: t('試點期每週查看：L0 覆蓋率、待重驗數、未收錄查詢數、L0 錯誤反饋數。') },
+      { id: 'search', name: t('全局搜索'), icon: 'search', desc: t('主體和文檔一起搜：名稱、別名、ID、定義，以及文檔的標題、摘要、標籤和正文。') },
       { id: 'changes', name: t('變更記錄'), icon: 'list', desc: t('每次知識寫入都是知識 Git 倉庫中的一次提交。') }
     ] },
     { id: 'knowledge', name: t('知識庫'), en: 'KNOWLEDGE', icon: 'grid', pages: [
@@ -597,7 +598,7 @@ PAGES.actions = async () => {
     a.kind === '取值' && !a.rpa ? `<button class="text-btn" data-op="invoke" data-id="${esc(a.id)}">${t('調用')}</button>` : '',
     a.rpa && isOwner() ? `<button class="text-btn" data-op="previewAction" data-id="${esc(a.id)}">${t('預覽')}</button><button class="text-btn" data-op="reviewAction" data-id="${esc(a.id)}">${t('審閱')}</button>` : '',
     a.rpa ? `<a class="text-btn" href="#executions/${esc(a.id)}">${t('記錄')}</a>` : '',
-    isOwner() ? `<button class="text-btn edit-action" data-id="${esc(a.id)}">${t('編輯')}</button>` : ''
+    isOwner() && !a.builtin ? `<button class="text-btn edit-action" data-id="${esc(a.id)}">${t('編輯')}</button>` : ''
   ].join('');
   content().innerHTML = panel(t('Action（{n}）', { n: list.length }), table(['ID', t('名稱'), t('種類'), t('管道'), t('請求 / 場景'), t('輸入 / 輸出'), t('調用權限'), t('操作')], list.map(a => `<tr><td>${tag(a.id)}</td><td class="wrap">${esc(a.name)}<span class="cell-sub">${esc(a.description || '')}</span></td><td>${vpill(a.kind, a.kind === '校驗' ? 'blue' : 'green', 'act')}${a.check ? `<span class="cell-sub">${esc(a.check.mode)}</span>` : ''}</td><td>${esc(pipelines.find(p => p.id === a.pipelineId)?.name || a.pipelineId)}</td><td class="mono wrap">${req(a)}</td><td class="wrap">${io(a)}</td><td>${esc(a.permission)}</td><td><div class="cell-actions">${ops(a)}</div></td></tr>`), t('尚無 Action')));
   $('#add-action')?.addEventListener('click', () => jsonDialog(t('新增 Action'), { ...actionTemplate(), pipelineId: pipelines[0]?.id || 'P-0001' }, body => post('/api/v1/actions', body)));
@@ -607,8 +608,8 @@ PAGES.actions = async () => {
 PAGES.pipelines = async () => {
   const list = await get('/api/v1/pipelines');
   setActions(isOwner() ? `<button class="button" id="add-rpa-pipeline">${t('新增 RPA 管道')}</button><button class="button primary" id="add-pipeline">${t('新增管道')}</button>` : '');
-  const typeName = { mock: [t('示意'), 'amber'], http: ['HTTP', 'blue'], rpa: ['RPA', 'green'] };
-  content().innerHTML = `<p class="notice" style="margin-bottom:12px">${t('管道屬於基礎設施，使用者通常只看到 Action。示意（mock）管道按路由返回模板結果；接入真實系統時改為 http 類型。')} ${t('RPA 管道對應瀏覽器 RPA 上的一個 API 用戶端，場景範圍與權限由 RPA 管。')}</p>${panel(t('管道（{n}）', { n: list.length }), table(['ID', t('名稱'), t('類型'), t('地址 / 路由'), t('說明'), t('操作')], list.map(p => `<tr><td>${tag(p.id)}</td><td>${esc(p.name)}</td><td>${pill(...(typeName[p.type] || [p.type]))}</td><td class="mono wrap">${esc(p.type === 'mock' ? (p.routes || []).map(r => `${r.method || 'GET'} ${r.path}`).join('\n') : p.baseUrl)}${p.rpa ? `<span class="cell-sub">${esc(t('並發 {n} · 排隊上限 {sec} 秒', { n: p.rpa.maxConcurrent, sec: p.rpa.queueTimeoutSec }))}${p.rpa.target ? ` · ${esc(p.rpa.target)}` : ''}</span>` : ''}</td><td class="wrap">${esc(p.description || '')}</td><td><div class="cell-actions">${isOwner() ? `${p.type === 'rpa' ? `<a class="text-btn" href="#scenes/${esc(p.id)}">${t('場景目錄')}</a>` : ''}<button class="text-btn test-pipe" data-id="${esc(p.id)}">${t('測試')}</button><button class="text-btn edit-pipe" data-id="${esc(p.id)}">${t('編輯')}</button>` : ''}</div></td></tr>`), t('尚無管道')))}`;
+  const typeName = { mock: [t('示意'), 'amber'], http: ['HTTP', 'blue'], rpa: ['RPA', 'green'], docs: [t('內置'), 'gray'] };
+  content().innerHTML = `<p class="notice" style="margin-bottom:12px">${t('管道屬於基礎設施，使用者通常只看到 Action。示意（mock）管道按路由返回模板結果；接入真實系統時改為 http 類型。')} ${t('RPA 管道對應瀏覽器 RPA 上的一個 API 用戶端，場景範圍與權限由 RPA 管。')}</p>${panel(t('管道（{n}）', { n: list.length }), table(['ID', t('名稱'), t('類型'), t('地址 / 路由'), t('說明'), t('操作')], list.map(p => `<tr><td>${tag(p.id)}</td><td>${esc(p.name)}</td><td>${pill(...(typeName[p.type] || [p.type]))}</td><td class="mono wrap">${esc(p.type === 'mock' ? (p.routes || []).map(r => `${r.method || 'GET'} ${r.path}`).join('\n') : p.type === 'docs' ? t('本系統文檔庫') : p.baseUrl)}${p.rpa ? `<span class="cell-sub">${esc(t('並發 {n} · 排隊上限 {sec} 秒', { n: p.rpa.maxConcurrent, sec: p.rpa.queueTimeoutSec }))}${p.rpa.target ? ` · ${esc(p.rpa.target)}` : ''}</span>` : ''}</td><td class="wrap">${esc(p.description || '')}</td><td><div class="cell-actions">${isOwner() ? `${p.type === 'rpa' ? `<a class="text-btn" href="#scenes/${esc(p.id)}">${t('場景目錄')}</a>` : ''}<button class="text-btn test-pipe" data-id="${esc(p.id)}">${t('測試')}</button>${p.builtin ? '' : `<button class="text-btn edit-pipe" data-id="${esc(p.id)}">${t('編輯')}</button>`}` : ''}</div></td></tr>`), t('尚無管道')))}`;
   $('#add-pipeline')?.addEventListener('click', () => jsonDialog(t('新增管道'), pipelineTemplate(), body => post('/api/v1/pipelines', body)));
   $('#add-rpa-pipeline')?.addEventListener('click', () => jsonDialog(t('新增 RPA 管道'), rpaPipelineTemplate(), body => post('/api/v1/pipelines', body)));
   $$('.edit-pipe').forEach(b => (b.onclick = () => { const p = list.find(x => x.id === b.dataset.id); const { id, updatedAt, ...rest } = p; jsonDialog(t('編輯 {id}', { id }), rest, body => put(`/api/v1/pipelines/${id}`, body)); }));
@@ -808,6 +809,7 @@ PAGES.playground = async () => {
       const askStatus = { answered: pill(t('已回答'), 'green'), ambiguous: pill(t('需要消歧'), 'amber'), uncovered: pill(t('知識庫未收錄'), 'red'), need_inputs: pill(t('需要參數'), 'amber') }[r.status];
       const composer = r.composer.type === 'openrouter' ? `OpenRouter · ${r.composer.model}` : r.composer.type === 'template' ? t('規則模板') : t('規則');
       $('#ask-result').innerHTML = `${panel(`${t('答案')} ${askStatus}`, `<div class="panel-body"><div class="answer">${esc(r.answer)}</div><p class="muted" style="font-size:11px;margin-top:10px">${esc(t('組織方式：{composer}', { composer }))}${r.composer.fallbackReason ? esc(t('（OpenRouter 失敗，已回退：{reason}）', { reason: r.composer.fallbackReason })) : ''}${r.gap ? esc(t(' · 已記為知識缺口 {id}', { id: r.gap.id })) : ''}</p>${r.next?.candidates ? `<div class="chip-row" style="margin-top:8px">${r.next.candidates.map(c => `<button class="button disambig" data-id="${esc(c.id)}">${esc(t('指 {name}', { name: c.name }))}</button>`).join('')}</div>` : ''}</div>`)}
+        ${r.documents?.length ? panel(t('文檔原文（補充）'), `<div class="panel-body"><p class="muted small" style="margin-bottom:8px">${esc(t('與知識的引用分開標註：文檔原文沒有層級，只作補充，不能覆蓋 L0 知識。'))}</p>${r.documents.map(x => `<div class="search-doc"><div><a href="#doc/${esc(x.docId)}${x.anchor ? `/${encodeURIComponent(x.anchor)}` : ''}"><strong>${esc(x.title)}</strong>${x.heading ? ` <span class="muted">§${esc(x.heading)}</span>` : ''}</a> <span class="mono small">${esc(x.cite)}</span>${x.linked ? ` ${pill(t('關聯了命中的主體'), 'blue')}` : ''}${x.cited ? ` ${pill(t('答案引用了'), 'green')}` : ''}</div><p class="search-snippet">${esc(x.snippet)}</p></div>`).join('')}</div>`) : ''}
         ${r.citations?.length ? panel(t('引用'), table(['ID', t('層級'), t('內容'), ''], r.citations.map(c => `<tr><td>${idLink(c.id)}</td><td>${level(c.level)}</td><td class="wrap">${esc(c.content || '')}</td><td>${c.kind !== 'action' ? `<button class="text-btn" data-op="feedback" data-id="${esc(c.id)}">${t('反饋有誤')}</button>` : ''}</td></tr>`))) : ''}
         ${r.realtime?.length ? panel(t('實時取值'), `<pre class="mono-block">${esc(JSON.stringify(r.realtime, null, 2))}</pre>`) : ''}
         ${panel(t('完整回應（結構化知識）'), `<details style="padding:0 12px"><summary>${t('展開 JSON')}</summary><pre class="mono-block">${esc(JSON.stringify(r, null, 2))}</pre></details>`)}`;
@@ -1038,6 +1040,9 @@ async function boot() {
 
 // 語言切換：頂欄與登入頁各一個下拉選單，選擇後重新載入頁面。
 $('#lang-slot').innerHTML = localeSelect('lang-select');
+// 頂欄全局搜索：Enter 打開搜索頁；按 / 聚焦
+$('#top-search').onsubmit = e => { e.preventDefault(); const q = $('#top-q').value.trim(); if (q) location.hash = `search?q=${encodeURIComponent(q)}`; };
+document.addEventListener('keydown', e => { if (e.key === '/' && !e.target.closest?.('input, textarea, select, [contenteditable]') && !$('#dialog').open) { e.preventDefault(); $('#top-q').focus(); } });
 $('#login-lang-slot').innerHTML = localeSelect('login-lang');
 for (const id of ['#lang-select', '#login-lang']) $(id).onchange = e => setLocale(e.target.value);
 

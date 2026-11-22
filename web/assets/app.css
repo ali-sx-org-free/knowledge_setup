@@ -291,3 +291,21 @@ details.menu>summary:after{content:"▾";margin-left:4px;font-size:10px;color:va
 @media(max-width:1280px){.docs-layout{grid-template-columns:200px minmax(0,1fr)}.docs-preview{grid-column:1/-1;position:static;max-height:none}.docs-preview:has(.docs-preview-empty){display:none}.doc-page,.doc-editor{grid-template-columns:minmax(0,1fr) 300px}}
 @media(max-width:1000px){.doc-page,.doc-editor{grid-template-columns:1fr}.doc-side,.editor-side{position:static;max-height:none}.md-split{grid-template-columns:1fr}.md-split.mode-split .md-preview{border-top:1px solid var(--line)}.md-src,.md-preview{height:auto;min-height:360px}}
 @media(max-width:760px){.docs-layout{grid-template-columns:1fr}.docs-main{order:-1}.docs-nav{position:static;max-height:none}.radio-cards,.conflict-cols{grid-template-columns:1fr}.doc-prose{padding:14px}}
+
+/* 第二期：導出選單鏈接、全局搜索、提取斷言 */
+.menu-list a{display:block;padding:7px 10px;border-radius:5px;font-size:12px;white-space:nowrap;color:var(--ink)}
+.menu-list a:hover{background:#f3f7fc}
+.top-search input{width:220px;min-height:30px;background:#f7f9fc}
+.top-search input:focus{background:#fff}
+.search-docs{display:grid;gap:12px}
+.search-doc{border-bottom:1px solid #f0f3f7;padding-bottom:10px}
+.search-doc:last-child{border-bottom:0;padding-bottom:0}
+.search-snippet{font-size:12px;line-height:1.7;margin-top:4px;color:#3e4f66}
+.search-snippet mark,.search-doc mark{background:#fff1b8;color:inherit;padding:0 1px;border-radius:2px}
+.extract-list{display:grid;gap:10px;margin-top:10px}
+.extract-row{border:1px solid var(--line);border-radius:8px;padding:8px 10px;display:grid;gap:6px}
+.extract-row textarea{min-height:52px;font-family:inherit;font-size:12px}
+.extract-grid{display:grid;grid-template-columns:minmax(0,1fr) 110px;gap:8px}
+.extract-pop{position:absolute;z-index:40;box-shadow:0 6px 18px #1b355033}
+@media(max-width:1100px){.top-search input{width:150px}}
+@media(max-width:700px){.top-search{display:none}.extract-grid{grid-template-columns:1fr}}
