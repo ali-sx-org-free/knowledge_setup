@@ -1,7 +1,7 @@
 // 管理後台：知識管理與可視化。頁面只填內容區，Portal 外殼與樣式沿用視覺樣式包。
 // 介面文字一律經 t() 取譯文（繁體原文即字典鍵，見 i18n.js）；枚舉值經 tv()，服務端寫入倉庫的固定措辭經 td()。
 import {
-  $, $$, esc, icon, shell, setHeading, toast, modal, closeModal, showError, download, copy, api, get, post, put, patch, del,
+  $, $$, esc, structuredValueText, icon, shell, setHeading, toast, modal, closeModal, showError, download, copy, api, get, post, put, patch, del,
   setUnauthorizedHandler, level, pill, vpill, tag, idLink, fmtTime, ago, pct, panel, table, formData, field, input, select, textarea, markdown, LEVEL_TEXT
 } from './core.js';
 import { renderGraph, legend } from './graph.js';
@@ -325,7 +325,7 @@ PAGES.subject = async ({ param: id }) => {
     content().innerHTML = `<div class="two-col"><div class="stack">${panel(t('別名'), `<div class="panel-body"><dl class="kv"><dt>ID</dt><dd>${tag(s.id)}</dd><dt>${t('類型')}</dt><dd>${t('別名')}</dd><dt>${t('指向')}</dt><dd>${card.alias.targets.map(x => `${idLink(x.id)} ${esc(x.name)}`).join('<br>') || '—'}</dd></dl><p class="notice ${card.alias.ambiguous ? 'warn' : ''}" style="margin-top:10px">${esc(card.alias.guidance)}</p></div>`)}</div><div>${panel(t('版本歷史'), historyHtml(history))}</div></div>`;
   } else {
     setActions(`<a class="button" href="#graph/${esc(s.id)}">${t('在圖譜中查看')}</a><button class="button" id="edit-subject">${t('編輯')}</button><button class="button" id="add-binding">${t('綁定客體')}</button><button class="button" id="add-relation">${t('新增關係')}</button><button class="button primary" id="add-assertion">${t('新增斷言')}</button>${me.isAdmin ? `<button class="button danger" id="del-subject">${t('刪除')}</button>` : ''}`);
-    const assertionRows = card.assertions.map(a => `<tr><td>${idLink(a.id)}</td><td>${esc(tv(a.type))}</td><td class="wrap">${esc(a.content)}${a.structured ? `<span class="cell-sub mono">${esc(a.structured.key)} = ${esc(a.structured.value)}</span>` : ''}${a.level === 'E1' ? `<span class="cell-sub">${esc(t('失效原因：{reason}', { reason: td(a.invalidReason) || '—' }))}${a.replacedBy ? `${t('；替代者 ')}${idLink(a.replacedBy)}` : ''}</span>` : ''}</td><td>${level(a.level)} ${pendingCell(a.validity)}</td><td class="wrap">${evidenceCell(a.validity)}</td><td>${rowOps(a.id, a.level)}</td></tr>`);
+    const assertionRows = card.assertions.map(a => `<tr><td>${idLink(a.id)}</td><td>${esc(tv(a.type))}</td><td class="wrap">${esc(a.content)}${a.structured ? `<span class="cell-sub mono">${esc(a.structured.key)} = ${esc(structuredValueText(a.structured.value))}</span>` : ''}${a.level === 'E1' ? `<span class="cell-sub">${esc(t('失效原因：{reason}', { reason: td(a.invalidReason) || '—' }))}${a.replacedBy ? `${t('；替代者 ')}${idLink(a.replacedBy)}` : ''}</span>` : ''}</td><td>${level(a.level)} ${pendingCell(a.validity)}</td><td class="wrap">${evidenceCell(a.validity)}</td><td>${rowOps(a.id, a.level)}</td></tr>`);
     const verifyText = v => (v.method === 'auto' ? t('Action 校驗（{by}）', { by: v.verifiedBy || '' }) : v.method === 'manual' ? t('負責人確認（{by}）', { by: v.verifiedBy || '' }) : t('未驗證'));
     const bindingRows = card.bindings.map(b => `<tr><td>${idLink(b.id)}</td><td class="wrap">${idLink(b.object.id)} ${esc(b.object.name)}<span class="cell-sub">${esc(tv(b.object.category))} · ${esc(tv(b.object.kind) || '')} ${b.object.locator ? '· ' + esc(b.object.locator) : ''}</span></td><td>${statusPill(b.object.status)}</td><td>${level(b.level)} ${pendingCell(b.validity)}</td><td>${esc(verifyText(b.validity))}<span class="cell-sub">${b.validity.expiresAt ? esc(t('有效期至 {date}', { date: fmtTime(b.validity.expiresAt) })) : ''}</span></td><td>${rowOps(b.id, b.level)}</td></tr>`);
     const relRow = (r, dir) => `<tr><td>${idLink(r.id)}</td><td>${dir === 'out' ? `<strong>${esc(s.name)}</strong>` : `${idLink(r.from.id)} ${esc(r.from.name)}`}</td><td>${vpill(r.type, 'blue', 'rel')}</td><td>${dir === 'out' ? `${idLink(r.to.id)} ${esc(r.to.name)}` : `<strong>${esc(s.name)}</strong>`}</td><td>${level(r.level)} ${pendingCell(r.validity)}</td><td>${rowOps(r.id, r.level)}</td></tr>`;
@@ -412,7 +412,7 @@ PAGES.item = async ({ param: id }) => {
     ${panel(t('有效性'), `<div class="panel-body"><dl class="kv">
       <dt>${t('層級')}</dt><dd>${level(v.level)} ${pendingCell(v)}</dd>
       <dt>${t('所屬主體')}</dt><dd>${it.subject ? `${idLink(it.subject.id)} ${esc(it.subject.name)}` : '—'}</dd>
-      ${it.kind === 'assertion' ? `<dt>${t('類型')}</dt><dd>${esc(tv(it.type))}</dd><dt>${t('內容')}</dt><dd>${esc(it.content)}</dd>${it.structured ? `<dt>${t('結構化值')}</dt><dd class="mono">${esc(it.structured.key)} = ${esc(it.structured.value)}</dd>` : ''}` : ''}
+      ${it.kind === 'assertion' ? `<dt>${t('類型')}</dt><dd>${esc(tv(it.type))}</dd><dt>${t('內容')}</dt><dd>${esc(it.content)}</dd>${it.structured ? `<dt>${t('結構化值')}</dt><dd class="mono">${esc(it.structured.key)} = ${esc(structuredValueText(it.structured.value))}</dd>` : ''}` : ''}
       ${it.kind === 'relation' ? `<dt>${t('關係')}</dt><dd>${idLink(it.from)} ${esc(it.fromSubject?.name)} –${esc(tv(it.type, 'rel'))}→ ${idLink(it.to)} ${esc(it.toSubject?.name)}</dd>` : ''}
       ${it.kind === 'binding' ? `<dt>${t('客體')}</dt><dd>${idLink(it.objectId)}</dd>` : ''}
       <dt>${t('證據')}</dt><dd>${evidenceCell(v)}</dd>
@@ -433,14 +433,74 @@ PAGES.item = async ({ param: id }) => {
 
 PAGES.assertions = async () => {
   const sc = schema;
-  content().innerHTML = panel(t('斷言一覽'), `<div class="toolbar"><label class="grow">${t('搜索')} <input id="f-q" placeholder="${esc(t('內容、ID、主體名'))}"></label><label>${t('類型')} ${select('type', [['', t('全部類型')], ...Object.keys(sc.assertionTypes).map(k => [k, tv(k)])], '', 'id="f-type"')}</label><label>${t('層級')} ${select('level', [['', t('全部')], 'L0', 'L1', 'L2', 'E1'], '', 'id="f-level"')}</label><label class="check"><input type="checkbox" id="f-pending"> ${t('只看待重驗')}</label><small id="f-count" class="muted"></small></div><div id="a-table"></div>`);
+  const owner = isOwner();
+  const controls = owner ? `<div class="toolbar"><label class="check"><input type="checkbox" id="approve-all" disabled> ${t('全選當前結果中的 L1 斷言')}</label><button class="button primary" id="approve-selected" disabled></button></div>` : '';
+  content().innerHTML = panel(t('斷言一覽'), `<div class="toolbar"><label class="grow">${t('搜索')} <input id="f-q" placeholder="${esc(t('內容、ID、主體名'))}"></label><label>${t('類型')} ${select('type', [['', t('全部類型')], ...Object.keys(sc.assertionTypes).map(k => [k, tv(k)])], '', 'id="f-type"')}</label><label>${t('層級')} ${select('level', [['', t('全部')], 'L0', 'L1', 'L2', 'E1'], '', 'id="f-level"')}</label><label class="check"><input type="checkbox" id="f-pending"> ${t('只看待重驗')}</label><small id="f-count" class="muted"></small></div>${controls}<div id="a-table"></div>`);
+  const target = $('#a-table');
+  const selected = new Set();
+  let visible = [];
+  let generation = 0;
+  const all = $('#approve-all');
+  const approve = $('#approve-selected');
+  const sync = () => {
+    if (!owner) return;
+    const count = visible.filter(a => a.validity.level === 'L1').length;
+    all.disabled = count === 0;
+    all.checked = count > 0 && selected.size === count;
+    all.indeterminate = selected.size > 0 && selected.size < count;
+    approve.disabled = selected.size === 0;
+    approve.textContent = t('批量審批（{n}）', { n: selected.size });
+  };
+  const reset = () => {
+    generation++;
+    visible = [];
+    selected.clear();
+    target.replaceChildren();
+    sync();
+  };
+  if (owner) {
+    target.onchange = e => {
+      const box = e.target.closest('input[data-assertion]');
+      if (!box) return;
+      if (box.checked) selected.add(box.dataset.assertion);
+      else selected.delete(box.dataset.assertion);
+      sync();
+    };
+    all.onchange = () => {
+      selected.clear();
+      for (const box of $$('input[data-assertion]', target)) {
+        box.checked = all.checked;
+        if (box.checked) selected.add(box.dataset.assertion);
+      }
+      sync();
+    };
+    approve.onclick = () => {
+      const rows = visible.filter(a => selected.has(a.id));
+      const items = rows.map(a => ({ id: a.id, version: a.reviewVersion }));
+      const review = table(['ID', t('主體'), t('內容'), t('證據')], rows.map(a => `<tr><td>${esc(a.id)}</td><td>${esc(a.subject.name)}</td><td class="wrap">${esc(a.content)}</td><td>${evidenceCell(a.validity)}</td></tr>`));
+      modal(t('批量審批（{n}）', { n: rows.length }), review + field(t('確認說明（選填）'), textarea('note', '')), {
+        label: t('確認為 L0'),
+        run: async () => {
+          await post('/api/v1/assertions/confirm-batch', { items, ...formData($('#dialog-content')) });
+          toast(t('已確認 {n} 條斷言', { n: items.length }));
+          await load();
+        }
+      });
+    };
+  }
   const load = async () => {
+    if (!target.isConnected) return;
+    reset();
+    const request = generation;
     const list = await get('/api/v1/assertions?' + qs({ q: $('#f-q').value, type: $('#f-type').value, level: $('#f-level').value, pending: $('#f-pending').checked ? '1' : '' }));
+    if (!target.isConnected || request !== generation) return;
+    visible = list;
+    sync();
     $('#f-count').textContent = t('{n} 條', { n: list.length });
-    $('#a-table').innerHTML = table(['ID', t('主體'), t('類型'), t('內容'), t('層級'), t('證據'), t('操作')], list.map(a => `<tr><td>${idLink(a.id)}</td><td>${idLink(a.subject.id)} ${esc(a.subject.name)}</td><td>${esc(tv(a.type))}</td><td class="wrap">${esc(a.content)}${a.structured ? `<span class="cell-sub mono">${esc(a.structured.key)} = ${esc(a.structured.value)}</span>` : ''}</td><td>${level(a.validity.level)} ${pendingCell(a.validity)}</td><td class="wrap">${evidenceCell(a.validity)}</td><td>${rowOps(a.id, a.validity.level)}</td></tr>`));
+    $('#a-table').innerHTML = table(['ID', t('主體'), t('類型'), t('內容'), t('層級'), t('證據'), t('操作')], list.map(a => `<tr><td>${owner && a.validity.level === 'L1' ? `<input type="checkbox" data-assertion="${esc(a.id)}" aria-label="${esc(a.id)}"> ` : ''}${idLink(a.id)}</td><td>${idLink(a.subject.id)} ${esc(a.subject.name)}</td><td>${esc(tv(a.type))}</td><td class="wrap">${esc(a.content)}${a.structured ? `<span class="cell-sub mono">${esc(a.structured.key)} = ${esc(structuredValueText(a.structured.value))}</span>` : ''}</td><td>${level(a.validity.level)} ${pendingCell(a.validity)}</td><td class="wrap">${evidenceCell(a.validity)}</td><td>${rowOps(a.id, a.validity.level)}</td></tr>`));
   };
   let timer;
-  $('#f-q').oninput = () => { clearTimeout(timer); timer = setTimeout(load, 200); };
+  $('#f-q').oninput = () => { clearTimeout(timer); reset(); timer = setTimeout(load, 200); };
   ['#f-type', '#f-level', '#f-pending'].forEach(s => ($(s).onchange = load));
   await load();
 };
@@ -937,7 +997,16 @@ PAGES.repo = async () => {
   $('#git-test').onclick = async () => { try { const r = await post('/admin/api/settings/git/test', formData(form)); const detail = r.data.empty ? t('倉庫為空，首次寫入會建立分支') : `${t('分支 {list}', { list: r.data.branches.join(t('、')) })}${r.data.branchExists ? '' : t('（目標分支尚不存在，將自動建立）')}`; toast(t('可連接（{auth}）：{detail}', { auth: authText(r.data.auth), detail }), 6000); } catch (e) { showError(e); } };
   form.onsubmit = async e => { e.preventDefault(); try { await put('/admin/api/settings/git', formData(form)); toast(t('已切換知識倉庫')); render(); } catch (err) { showError(err); } };
   $('#git-sync').onclick = async () => { try { const r = await post('/admin/api/sync'); toast(r.data.changed ? t('已拉取遠端更新並重新載入') : t('已是最新')); render(); } catch (e) { showError(e); } };
-  $('#seed').onclick = async () => { try { const r = await post('/admin/api/seed'); toast(t('已載入示例資料（{n} 個主體）', { n: r.data.subjects })); location.hash = `subject/${r.data.focus}`; } catch (e) { showError(e); } };
+  $('#seed').onclick = async () => {
+    const button = $('#seed');
+    button.disabled = true;
+    try {
+      const { data } = await post('/admin/api/seed');
+      toast(data.subjects ? t('已載入示例資料（{n} 個主體）', { n: data.subjects }) : data.docsAdded ? t('已補齊示例資料（新增 {n} 篇文檔，保留現有知識）', { n: data.docsAdded }) : t('示例資料已齊全，保留現有內容'));
+      location.hash = data.subjects ? `subject/${data.focus}` : 'docs';
+    } catch (e) { showError(e); }
+    finally { button.disabled = false; }
+  };
   if ($('#copy-pub')) $('#copy-pub').onclick = () => copy(ssh.publicKey);
   const generate = async () => { await post('/admin/api/settings/git/ssh-key'); toast(t('已產生部署金鑰：複製公鑰並添加到倉庫的 Deploy keys（勾選 Allow write access）'), 6000); rerender(); };
   if ($('#ssh-generate')) $('#ssh-generate').onclick = () => (ssh.hasKey

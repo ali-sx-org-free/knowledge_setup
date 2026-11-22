@@ -257,6 +257,15 @@ export function v1Router(ctx) {
     const out = await S().tx(req.principal, `[確認] ${req.params.id} → L0（負責人 ${req.principal.name}）`, t => S().confirm(t, req.params.id, req.body || {}, req.principal));
     txOut(res, out);
   });
+  r.post('/assertions/confirm-batch', owner, async (req, res) => {
+    const { items, note } = req.body || {};
+    if (!Array.isArray(items) || !items.length || items.some(x => !x || typeof x.id !== 'string' || typeof x.version !== 'string') ||
+        new Set(items.map(x => x.id)).size !== items.length || (note != null && typeof note !== 'string')) {
+      throw new HttpError(400, tr('請提供不重複的斷言 ID 與審閱版本'), 'invalid_input');
+    }
+    const out = await S().tx(req.principal, `[批量審批] ${items.length} 條斷言 → L0`, t => S().confirmAssertions(t, items, note, req.principal));
+    txOut(res, out);
+  });
   r.post('/items/:id/invalidate', owner, async (req, res) => {
     const out = await S().tx(req.principal, `[失效] ${req.params.id} → E1：${String(req.body?.reason || '').slice(0, 60)}`, t => S().invalidateItem(t, req.params.id, req.body || {}, req.principal));
     txOut(res, out);

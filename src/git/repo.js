@@ -227,11 +227,12 @@ export class GitRepo {
     return (await this.git(['rev-parse', '--short', 'HEAD'])).trim();
   }
 
-  async log({ limit = 30, file } = {}) {
+  async log({ limit = 30, file, paths } = {}) {
     if (!(await this.hasCommits())) return [];
     const sep = '\x1f';
     const args = ['log', `-n${limit}`, `--pretty=format:%h${sep}%an${sep}%ae${sep}%aI${sep}%s`];
     if (file) args.push('--follow', '--', file);
+    else if (paths?.length) args.push('--', ...paths.map(p => `:(top,literal)${p}`));
     const out = await this.git(args);
     return out.split('\n').filter(Boolean).map(line => {
       const [hash, author, email, date, subject] = line.split(sep);

@@ -1,6 +1,10 @@
 // 服務端英文字典：鍵是代碼中 tr() / tk() 的繁體原文（見 src/i18n/index.js），值是英文譯文。
 // 枚舉值與知識模型說明的譯名與管理後台字典（web/assets/locales/）一致。新增或修改文字後執行 node scripts/i18n-check.js。
 export default {
+  "無法補齊文檔示例，舊示例的依據缺失或不唯一：{items}。請改用新的測試目錄載入完整示例。": "Cannot add sample documents because legacy sample references are missing or ambiguous: {items}. Load the full samples in a new test directory.",
+  "斷言 {id} 已變更，請重新整理並核對後再審批": "Assertion {id} has changed. Refresh and review it before approving.",
+  "請提供不重複的斷言 ID 與審閱版本": "Provide unique assertion IDs with their reviewed versions.",
+  "批量審批所選 L1 斷言": "Approve selected L1 assertions in one transaction",
   "系統": "System",
   "業務對象": "Business object",
   "流程": "Process",

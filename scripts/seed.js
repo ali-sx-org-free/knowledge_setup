@@ -7,7 +7,7 @@ import { seedInventory } from '../src/seed/inventory.js';
 const srv = await createServer({ schedulers: false });
 try {
   const out = await seedInventory(srv.ctx, ADMIN_PRINCIPAL);
-  console.log(`已載入示例資料：${out.subjects} 個主體，焦點主體 ${out.focus}`);
+  console.log(`已載入示例資料：新增 ${out.subjects} 個主體、${out.docsAdded} 篇文檔，焦點主體 ${out.focus}；已有內容保留`);
 } catch (err) {
   console.error(`載入失敗：${err.message}`);
   process.exitCode = 1;

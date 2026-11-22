@@ -1,6 +1,7 @@
 // 知識庫存儲：以 Git 倉庫中的 YAML 檔案為唯一事實來源，記憶體中維護索引。
 // 每個寫入操作 = 一個事務 = 一次 Git 提交（作者為提交知識的人、智能體或管道）。
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import YAML from 'yaml';
 import {
@@ -30,6 +31,7 @@ const DIRS = {
 const COLLECTION = { subject: 'subjects', object: 'objects', relation: 'relations', action: 'actions', pipeline: 'pipelines', conflict: 'conflicts', feedback: 'feedback', gap: 'gaps', template: 'docTemplates' };
 
 const nowIso = () => new Date().toISOString();
+const reviewVersion = assertion => createHash('sha256').update(JSON.stringify(assertion)).digest('hex');
 const clean = v => (typeof v === 'string' ? v.trim() : v);
 const notFound = (what, id) => new RuleError(tr('找不到{what} {id}', { what: tr(what), id }), 404, 'not_found');
 
@@ -460,7 +462,7 @@ export class KnowledgeStore {
         if (type && a.type !== type) continue;
         if (pending && !a.validity.pending) continue;
         if (nq && !`${a.id} ${a.content} ${s.name}`.toLowerCase().includes(nq)) continue;
-        out.push({ ...a, subject: this.subjectSummary(s) });
+        out.push({ ...a, subject: this.subjectSummary(s), reviewVersion: reviewVersion(a) });
       }
     }
     return out.sort((a, b) => a.id.localeCompare(b.id));
@@ -936,6 +938,16 @@ export class KnowledgeStore {
   }
 
   /** 負責人確認：L1 → L0（或續期）。智能體不能晉升。 */
+  confirmAssertions(t, items, note, principal) {
+    return items.map(({ id, version }) => {
+      const ref = this.getItem(id);
+      if (ref.kind !== 'assertion' || ref.item.validity.level !== 'L1' || reviewVersion(ref.item) !== version) {
+        throw new RuleError(tr('斷言 {id} 已變更，請重新整理並核對後再審批', { id }), 409, 'stale_assertion');
+      }
+      return this.confirm(t, id, { note }, principal);
+    });
+  }
+
   confirm(t, id, input, principal) {
     const ref = this.getItem(id);
     this.assertOwner(principal, ref.subject);
