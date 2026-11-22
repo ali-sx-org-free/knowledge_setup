@@ -325,12 +325,11 @@ PAGES.subject = async ({ param: id }) => {
     content().innerHTML = `<div class="two-col"><div class="stack">${panel(t('別名'), `<div class="panel-body"><dl class="kv"><dt>ID</dt><dd>${tag(s.id)}</dd><dt>${t('類型')}</dt><dd>${t('別名')}</dd><dt>${t('指向')}</dt><dd>${card.alias.targets.map(x => `${idLink(x.id)} ${esc(x.name)}`).join('<br>') || '—'}</dd></dl><p class="notice ${card.alias.ambiguous ? 'warn' : ''}" style="margin-top:10px">${esc(card.alias.guidance)}</p></div>`)}</div><div>${panel(t('版本歷史'), historyHtml(history))}</div></div>`;
   } else {
     setActions(`<a class="button" href="#graph/${esc(s.id)}">${t('在圖譜中查看')}</a><button class="button" id="edit-subject">${t('編輯')}</button><button class="button" id="add-binding">${t('綁定客體')}</button><button class="button" id="add-relation">${t('新增關係')}</button><button class="button primary" id="add-assertion">${t('新增斷言')}</button>${me.isAdmin ? `<button class="button danger" id="del-subject">${t('刪除')}</button>` : ''}`);
-    const assertionRows = card.assertions.map(a => `<tr><td>${idLink(a.id)}</td><td>${esc(tv(a.type))}</td><td class="wrap">${esc(a.content)}${a.structured ? `<span class="cell-sub mono">${esc(a.structured.key)} = ${esc(structuredValueText(a.structured.value))}</span>` : ''}${a.level === 'E1' ? `<span class="cell-sub">${esc(t('失效原因：{reason}', { reason: td(a.invalidReason) || '—' }))}${a.replacedBy ? `${t('；替代者 ')}${idLink(a.replacedBy)}` : ''}</span>` : ''}</td><td>${level(a.level)} ${pendingCell(a.validity)}</td><td class="wrap">${evidenceCell(a.validity)}</td><td>${rowOps(a.id, a.level)}</td></tr>`);
+    const assertionRow = a => `<tr><td>${idLink(a.id)}</td><td>${esc(tv(a.type))}</td><td class="wrap">${esc(a.content)}${a.structured ? `<span class="cell-sub mono">${esc(a.structured.key)} = ${esc(structuredValueText(a.structured.value))}</span>` : ''}${a.level === 'E1' ? `<span class="cell-sub">${esc(t('失效原因：{reason}', { reason: td(a.invalidReason) || '—' }))}${a.replacedBy ? `${t('；替代者 ')}${idLink(a.replacedBy)}` : ''}</span>` : ''}</td><td>${level(a.level)} ${pendingCell(a.validity)}</td><td class="wrap">${evidenceCell(a.validity)}</td><td>${rowOps(a.id, a.level)}</td></tr>`;
     const verifyText = v => (v.method === 'auto' ? t('Action 校驗（{by}）', { by: v.verifiedBy || '' }) : v.method === 'manual' ? t('負責人確認（{by}）', { by: v.verifiedBy || '' }) : t('未驗證'));
     const bindingRows = card.bindings.map(b => `<tr><td>${idLink(b.id)}</td><td class="wrap">${idLink(b.object.id)} ${esc(b.object.name)}<span class="cell-sub">${esc(tv(b.object.category))} · ${esc(tv(b.object.kind) || '')} ${b.object.locator ? '· ' + esc(b.object.locator) : ''}</span></td><td>${statusPill(b.object.status)}</td><td>${level(b.level)} ${pendingCell(b.validity)}</td><td>${esc(verifyText(b.validity))}<span class="cell-sub">${b.validity.expiresAt ? esc(t('有效期至 {date}', { date: fmtTime(b.validity.expiresAt) })) : ''}</span></td><td>${rowOps(b.id, b.level)}</td></tr>`);
     const relRow = (r, dir) => `<tr><td>${idLink(r.id)}</td><td>${dir === 'out' ? `<strong>${esc(s.name)}</strong>` : `${idLink(r.from.id)} ${esc(r.from.name)}`}</td><td>${vpill(r.type, 'blue', 'rel')}</td><td>${dir === 'out' ? `${idLink(r.to.id)} ${esc(r.to.name)}` : `<strong>${esc(s.name)}</strong>`}</td><td>${level(r.level)} ${pendingCell(r.validity)}</td><td>${rowOps(r.id, r.level)}</td></tr>`;
-    content().innerHTML = `<div class="two-col"><div class="stack">
-      ${panel(t('斷言（{n}）', { n: card.assertions.length }), table(['ID', t('類型'), t('內容'), t('層級'), t('證據'), t('操作')], assertionRows, t('尚無斷言。約束類斷言（否定性知識、邊界情況）最容易被智能體用常識補錯，建議優先收集。')))}
+    content().innerHTML = `<div class="stack"><div class="two-col subject-overview"><div class="stack">
       ${panel(t('客體綁定（{n}）', { n: card.bindings.length }), table(['ID', t('客體'), t('狀態'), t('層級'), t('驗證'), t('操作')], bindingRows, t('尚無客體綁定：綜合層級為 L2')), `<span class="muted" style="font-size:11px">${t('綜合層級 = 有效綁定中的最高層級')}</span>`)}
       ${panel(t('關係（{n}）', { n: card.relations.outgoing.length + card.relations.incoming.length }), table(['ID', t('起點'), t('關係'), t('終點'), t('層級'), t('操作')], [...card.relations.outgoing.map(r => relRow(r, 'out')), ...card.relations.incoming.map(r => relRow(r, 'in'))], t('尚無關係')))}
       ${subjectDocsPanel(s, card.documents || [])}
@@ -339,7 +338,60 @@ PAGES.subject = async ({ param: id }) => {
       ${panel(t('可用 Action'), `<div class="panel-body stack-sm">${actionLibrary(card.actions) || `<p class="muted">${t('綁定的客體沒有配置 Action。')}</p>`}${card.dynamicValueNote ? `<p class="notice">${esc(card.dynamicValueNote)}</p>` : ''}</div>`)}
       ${panel(t('一跳鄰域'), `<div id="mini-graph" class="graph-canvas"></div>`)}
       ${panel(t('版本歷史'), historyHtml(history))}
-    </div></div>`;
+    </div></div>
+      <div id="subject-assertions">${panel(t('斷言（{n}）', { n: card.assertions.length }), `
+        <div class="toolbar assertion-pagination">
+          <span id="assertion-range" class="muted" role="status" aria-live="polite"></span>
+          <div class="actions">
+            <label>${t('層級')}${select('assertion-level', [['active', t('有效斷言')], ['all', t('全部斷言')], 'L0', 'L1', 'L2', 'E1'], 'active', 'id="assertion-level" aria-controls="subject-assertion-table"')}</label>
+            <label>${t('每頁條數')}${select('assertion-page-size', [10, 20, 50], 10, 'id="assertion-page-size" aria-controls="subject-assertion-table"')}</label>
+          </div>
+        </div>
+        <div id="subject-assertion-table"></div>
+        <nav class="toolbar assertion-pagination" aria-label="${esc(t('斷言分頁'))}">
+          <span id="assertion-page-info" class="muted"></span>
+          <div class="actions">
+            <button class="button" id="assertion-first" aria-controls="subject-assertion-table">${t('首頁')}</button>
+            <button class="button" id="assertion-prev" aria-controls="subject-assertion-table">${t('上一頁')}</button>
+            <button class="button" id="assertion-next" aria-controls="subject-assertion-table">${t('下一頁')}</button>
+            <button class="button" id="assertion-last" aria-controls="subject-assertion-table">${t('末頁')}</button>
+          </div>
+        </nav>`)}</div>
+    </div>`;
+    let assertionPage = 1;
+    let assertionPageSize = 10;
+    let assertionLevel = 'active';
+    const filteredAssertions = () => card.assertions.filter(a => assertionLevel === 'all' || (assertionLevel === 'active' ? a.level !== 'E1' : a.level === assertionLevel));
+    const assertionPageCount = () => Math.max(1, Math.ceil(filteredAssertions().length / assertionPageSize));
+    const renderAssertions = () => {
+      const assertions = filteredAssertions();
+      const total = assertions.length;
+      const pages = assertionPageCount();
+      assertionPage = Math.max(1, Math.min(assertionPage, pages));
+      const start = (assertionPage - 1) * assertionPageSize;
+      const rows = assertions.slice(start, start + assertionPageSize).map(assertionRow);
+      $('#subject-assertions h2').textContent = t('斷言（{n}）', { n: total });
+      $('#subject-assertion-table').innerHTML = table(['ID', t('類型'), t('內容'), t('層級'), t('證據'), t('操作')], rows, t('尚無斷言。約束類斷言（否定性知識、邊界情況）最容易被智能體用常識補錯，建議優先收集。'));
+      $('#assertion-range').textContent = t('顯示 {start}–{end} 條，共 {total} 條', { start: total ? start + 1 : 0, end: Math.min(start + assertionPageSize, total), total });
+      $('#assertion-page-info').textContent = t('第 {page} / {pages} 頁', { page: assertionPage, pages });
+      $('#assertion-first').disabled = $('#assertion-prev').disabled = assertionPage === 1;
+      $('#assertion-next').disabled = $('#assertion-last').disabled = assertionPage === pages;
+    };
+    $('#assertion-page-size').onchange = e => {
+      assertionPageSize = Number(e.target.value);
+      assertionPage = 1;
+      renderAssertions();
+    };
+    $('#assertion-level').onchange = e => {
+      assertionLevel = e.target.value;
+      assertionPage = 1;
+      renderAssertions();
+    };
+    $('#assertion-first').onclick = () => { assertionPage = 1; renderAssertions(); };
+    $('#assertion-prev').onclick = () => { assertionPage--; renderAssertions(); };
+    $('#assertion-next').onclick = () => { assertionPage++; renderAssertions(); };
+    $('#assertion-last').onclick = () => { assertionPage = assertionPageCount(); renderAssertions(); };
+    renderAssertions();
     renderGraph($('#mini-graph'), graph, { focus: s.id, height: 300, onSelect: n => { if (n.id !== s.id) location.hash = `subject/${n.id}`; } });
     $('#edit-subject').onclick = () => subjectDialog({ ...s });
     $('#add-assertion').onclick = () => assertionDialog(s, card);
