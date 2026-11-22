@@ -1,7 +1,7 @@
 // 文檔搜索（設計文件 §10.4）：標題、摘要、標籤、欄位、章節標題、正文按權重遞減；
 // 中文按單字與雙字詞、英文按單詞匹配；查詢中的術語先經 resolveTerms 解析為規範主體，關聯了該主體的文檔加權；
 // 結果帶最匹配的章節（錨點與摘錄）。索引按文檔 etag 快取在記憶體中。
-import { parseSections } from '../../web/assets/markdown.js';
+import { parseSections, REF_RE } from '../../web/assets/markdown.js';
 
 const CJK = /[㐀-鿿豈-﫿]/;
 const STOP = new Set([...'的了是在有和與与及或也都就還还會会能要把被從从到對对為为於于個个這这那哪些麼么樣样何請请問问嗎吗呢吧啊']);
@@ -113,7 +113,7 @@ export class DocSearch {
         for (const u of units) if (u.subjects.some(sid => s.text.includes(sid) || (st.subjects.get(sid)?.name && s.text.includes(st.subjects.get(sid).name)))) sc += 1;
         if (sc > bestScore) { bestScore = sc; match = s; }
       }
-      hits.push({ doc, side, score: Math.round(score * 10) / 10, match: match ? { anchor: match.anchor, heading: match.heading, path: match.path, snippet: snippet(match.text || match.heading, terms) } : null });
+      hits.push({ doc, side, score: Math.round(score * 10) / 10, match: match ? { anchor: match.anchor, heading: match.heading, path: match.path, snippet: snippet(plainDocText(st, match.text) || match.heading, terms) } : null });
     }
     hits.sort((a, b) => b.score - a.score || a.doc.id.localeCompare(b.doc.id));
     return { hits, terms };
@@ -146,8 +146,17 @@ export class DocSearch {
       }
     }
     out.sort((a, b) => b.score - a.score);
-    return { hits: out.slice(0, limit).map(h => ({ ...h, snippet: snippet(h.section.text || h.section.heading, terms) })), terms };
+    return { hits: out.slice(0, limit).map(h => ({ ...h, snippet: snippet(plainDocText(st, h.section.text) || h.section.heading, terms) })), terms };
   }
+}
+
+/** 摘錄用的純文字：[[ID]] 換成名稱，去掉代碼塊圍欄、列表符號和行內標記。 */
+export function plainDocText(store, text) {
+  return String(text || '')
+    .replace(REF_RE, (all, id) => store.subjects.get(id)?.name || store.objects.get(id)?.name || id)
+    .replace(/```[\w-]*|~~~/g, ' ').replace(/!\[[^\]]*\]\([^)]*\)/g, ' ').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\*\*|__|`/g, '').replace(/^\s*(?:[-*+]|\d+\.)\s+/gm, '').replace(/^\s*\|?\s*:?-{3,}.*$/gm, ' ').replace(/\|/g, ' ')
+    .replace(/\s+/g, ' ').trim();
 }
 
 /** 取包含查詢詞的一段摘錄（前後約 40 字）。 */

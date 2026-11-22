@@ -8,6 +8,22 @@ import { tr, currentLocale, SOURCE_LOCALE } from '../i18n/index.js';
 const F = (key, label, type, extra = {}) => ({ key, label, type, ...extra });
 const S = (heading, extra = {}) => ({ heading, ...extra });
 
+/**
+ * 主體手冊（第二期，設計 §9.4「從知識生成文檔」）：把一個主體或一個領域的知識卡渲染成可讀的文檔。
+ * generator: handbook 表示正文由系統生成、只讀，知識變化後重新生成；不登記客體，不作為知識的證據（避免循環）。
+ * 舊倉庫裡沒有這個模板時，第一次生成手冊時以下一個模板編號寫入。
+ */
+export const HANDBOOK_TEMPLATE = {
+  id: 'TPL-0007', name: '主體手冊', purpose: '知識', objectKind: '知識文檔', approval: 'contributor', reviewEveryDays: null, immutable: false, defaultFolder: '通用', generator: 'handbook',
+  description: '由知識自動生成的主體或領域手冊：正文只讀，知識變化後重新生成；不作為知識的證據',
+  fields: [],
+  sections: [S('概述'), S('斷言'), S('關係'), S('客體與依據'), S('相關文檔'), S('可用 Action')],
+  i18n: {
+    'zh-CN': { name: '主体手册', description: '由知识自动生成的主体或领域手册：正文只读，知识变化后重新生成；不作为知识的证据', sections: { 概述: ['概述'], 斷言: ['断言'], 關係: ['关系'], 客體與依據: ['客体与依据'], 相關文檔: ['相关文档'], '可用 Action': ['可用 Action'] } },
+    en: { name: 'Subject handbook', description: 'Generated from the knowledge base for one subject or one domain: the body is read-only and is regenerated when the knowledge changes; never used as evidence', sections: { 概述: ['Overview'], 斷言: ['Assertions'], 關係: ['Relations'], 客體與依據: ['Objects and basis'], 相關文檔: ['Related documents'], '可用 Action': ['Available actions'] } }
+  }
+};
+
 export const BUILTIN_TEMPLATES = [
   {
     id: 'TPL-0001', name: '知識條目', purpose: '知識', objectKind: '知識文檔', approval: 'contributor', reviewEveryDays: null, immutable: false, defaultFolder: '通用',
@@ -122,7 +138,8 @@ export const BUILTIN_TEMPLATES = [
       'zh-CN': { name: '评审记录', description: '一次评审的记录：评审对象、参与人、结论与待办。发布后不再修改，有误时废止并发一份新记录', fields: { target: '评审对象', reviewedOn: '评审日期', participants: '参与人', verdict: '结论' }, options: { 通過: '通过', 有條件通過: '有条件通过', 不通過: '不通过' }, sections: { 評審內容: ['评审内容', '评审了什么：文档版本、方案要点'], 意見與討論: ['意见与讨论'], 結論: ['结论', '结论和理由；有条件通过时写明条件'], 待辦事項: ['待办事项', '事项、负责人、期限'] } },
       en: { name: 'Review record', description: 'The record of one review: what was reviewed, who took part, the verdict and follow-ups. Not edited after publishing; if wrong, make it obsolete and publish a new record', fields: { target: 'Reviewed document', reviewedOn: 'Review date', participants: 'Participants', verdict: 'Verdict' }, options: { 通過: 'Approved', 有條件通過: 'Approved with conditions', 不通過: 'Rejected' }, sections: { 評審內容: ['Scope of review', 'What was reviewed: document version, key points of the proposal'], 意見與討論: ['Comments and discussion'], 結論: ['Verdict', 'The verdict and why; list the conditions when approved with conditions'], 待辦事項: ['Follow-ups', 'Item, owner, due date'] } }
     }
-  }
+  },
+  HANDBOOK_TEMPLATE
 ];
 
 const KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
@@ -188,6 +205,9 @@ export function normalizeTemplate(input, { id, objectKinds } = {}) {
     id, name, purpose, description: clean(input.description) || null, objectKind, approval, reviewEveryDays: days,
     immutable: input.immutable === true, defaultFolder: clean(input.defaultFolder) || null, fields, sections
   };
+  // 四眼原則（第二期）：發布人不能是這一版的作者
+  if (input.requireOtherApprover === true) tpl.requireOtherApprover = true;
+  if (input.generator === 'handbook') tpl.generator = 'handbook';
   if (input.i18n && typeof input.i18n === 'object') tpl.i18n = input.i18n;
   return tpl;
 }

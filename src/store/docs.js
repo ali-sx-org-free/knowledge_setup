@@ -7,12 +7,13 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import YAML from 'yaml';
 import { RuleError, sourceOf, demoteToL1 } from './validity.js';
-import { OBJECT_CATEGORIES, ID_PREFIX, kindOfId } from './model.js';
-import { normalizeTemplate, checkFields, skeleton, localizeTemplate } from './doc-templates.js';
+import { OBJECT_CATEGORIES, ID_PREFIX, kindOfId, ASSERTION_TYPES } from './model.js';
+import { normalizeTemplate, checkFields, skeleton, localizeTemplate, HANDBOOK_TEMPLATE } from './doc-templates.js';
 import { lintDoc, hasErrors } from '../services/doc-lint.js';
 import { DocSearch } from '../services/doc-search.js';
 import { parseSections, extractRefs } from '../../web/assets/markdown.js';
 import { tr } from '../i18n/index.js';
+import { renderHandbook } from '../services/doc-generate.js';
 
 export const DOCS = 'docs';
 export const DRAFTS = 'docs/_drafts';
@@ -30,7 +31,7 @@ export const VIEWS = ['mine', 'review', 'recent', 'review-soon', 'review-overdue
 const DAY = 86400000;
 
 const META_ORDER = ['id', 'title', 'template', 'status', 'version', 'summary', 'tags', 'owner', 'ownerIds', 'subjects', 'objects', 'related', 'objectId', 'fields', 'review', 'change',
-  'folder', 'startVersion', 'baseVersion', 'reviewNote', 'submittedAt', 'submittedBy', 'replacedBy', 'obsoleteReason', 'obsoleteAt', 'obsoleteBy', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy'];
+  'generated', 'aiDraft', 'editors', 'folder', 'startVersion', 'baseVersion', 'reviewNote', 'submittedAt', 'submittedBy', 'replacedBy', 'obsoleteReason', 'obsoleteAt', 'obsoleteBy', 'createdAt', 'createdBy', 'updatedAt', 'updatedBy'];
 const LIST_KEYS = ['tags', 'ownerIds', 'subjects', 'objects', 'related'];
 
 const nowIso = () => new Date().toISOString();
@@ -40,6 +41,21 @@ const etagOf = raw => crypto.createHash('sha1').update(raw).digest('hex').slice(
 const dateOnly = ms => new Date(ms).toISOString().slice(0, 10);
 const fail = (status, code, message, extra = {}) => Object.assign(new RuleError(message, status, code), extra);
 const idList = v => (Array.isArray(v) ? v : v ? String(v).split(/[,，\s]+/) : []).map(x => String(x).trim()).filter(Boolean);
+/** 這一版的編寫者（四眼原則用）：草稿的建立者（從未發布時）、每個保存過的人、提交人。 */
+const addEditor = (list, by) => [...(Array.isArray(list) ? list : []).filter(x => x?.id !== by.id), by];
+export function authorsOf(meta, { firstVersion = false } = {}) {
+  const ids = new Set((Array.isArray(meta.editors) ? meta.editors : []).map(x => x?.id).filter(Boolean));
+  if (meta.updatedBy?.id) ids.add(meta.updatedBy.id);
+  if (meta.submittedBy?.id) ids.add(meta.submittedBy.id);
+  if (firstVersion && meta.createdBy?.id) ids.add(meta.createdBy.id);
+  return [...ids];
+}
+/** sourceRef 指向本文檔的章節：DOC-0001§計算公式 v4 → 計算公式。 */
+export function sectionOfSourceRef(ref, docId) {
+  const m = /^(DOC-\d+)§(.+?)(?:\s+v(\d+))?$/.exec(String(ref || '').trim());
+  return m && (!docId || m[1] === docId) ? { docId: m[1], heading: m[2].trim(), version: m[3] ? Number(m[3]) : null } : null;
+}
+const sameText = (a, b) => String(a || '').replace(/[\s，。、；：,.;:！!？?（）()「」『』"'“”‘’]/g, '').toLowerCase() === String(b || '').replace(/[\s，。、；：,.;:！!？?（）()「」『』"'“”‘’]/g, '').toLowerCase();
 
 // ---------------------------------------------------------------- 檔案格式
 /** 解析文檔檔案：返回 { meta, body }；沒有 front matter 時 meta 為 null。front matter 不是合法 YAML 時拋錯。 */
@@ -331,7 +347,7 @@ export class DocLibrary {
     const tpl = this.templates.get(id);
     if (!tpl) return { id, missing: true };
     const v = localizeTemplate(tpl);
-    return { id, name: tpl.name, label: v.label, purpose: tpl.purpose, approval: tpl.approval, immutable: !!tpl.immutable };
+    return { id, name: tpl.name, label: v.label, purpose: tpl.purpose, approval: tpl.approval, immutable: !!tpl.immutable, requireOtherApprover: !!tpl.requireOtherApprover, generator: tpl.generator || null };
   }
 
   /** 文檔摘要（列表、搜索結果）。side：pub 已發布版本、draft 草稿或修訂；預設有已發布版本時用它。 */
@@ -368,6 +384,8 @@ export class DocLibrary {
       replacedBy: pubM?.replacedBy || null,
       obsoleteReason: pubM?.obsoleteReason || null,
       obsoleteAt: pubM?.obsoleteAt || null,
+      generated: pubM?.generated ? { kind: pubM.generated.kind, target: pubM.generated.target } : null,
+      aiDraft: doc.draft?.meta.aiDraft || null,
       createdAt: m.createdAt || null,
       createdBy: m.createdBy || null,
       updatedAt: m.updatedAt || pubM?.change?.publishedAt || null,
@@ -389,7 +407,8 @@ export class DocLibrary {
       path: e.path,
       etag: e.etag,
       body: e.body,
-      draft: doc.draft && this.canSeeDrafts(principal) ? { etag: doc.draft.etag, status: doc.draft.meta.status, updatedAt: doc.draft.meta.updatedAt || null, updatedBy: doc.draft.meta.updatedBy || null, reviewNote: doc.draft.meta.reviewNote || null, submittedAt: doc.draft.meta.submittedAt || null, submittedBy: doc.draft.meta.submittedBy || null } : null,
+      draft: doc.draft && this.canSeeDrafts(principal) ? { etag: doc.draft.etag, status: doc.draft.meta.status, updatedAt: doc.draft.meta.updatedAt || null, updatedBy: doc.draft.meta.updatedBy || null, reviewNote: doc.draft.meta.reviewNote || null, submittedAt: doc.draft.meta.submittedAt || null, submittedBy: doc.draft.meta.submittedBy || null, editors: doc.draft.meta.editors || [], aiDraft: doc.draft.meta.aiDraft || null } : null,
+      generated: this.generatedState(doc),
       publishedEtag: doc.pub?.etag || null,
       startVersion: m.startVersion || null,
       baseVersion: m.baseVersion || null,
@@ -458,6 +477,7 @@ export class DocLibrary {
         type: it.type || null,
         content: ref.kind === 'assertion' ? it.content : null,
         objectId: ref.kind === 'binding' ? it.objectId : null,
+        sourceRef: ref.kind === 'binding' ? null : v.evidence.sourceRef || null,
         from: ref.kind === 'relation' ? st.subjectSummary(st.subjects.get(it.from)) : null,
         to: ref.kind === 'relation' ? st.subjectSummary(st.subjects.get(it.to)) : null
       });
@@ -477,7 +497,7 @@ export class DocLibrary {
       const b = m.objectId ? bound.get(m.objectId) : null;
       const linked = m.subjects.includes(subjectId);
       if (!b && !linked) continue;
-      out.push({ id: d.id, title: m.title, template: m.template, templateName: this.templates.get(m.template)?.name || null, status: m.status, version: m.version ?? null, summary: m.summary || null, folder: this.folderOf(d), relation: b ? 'binding' : 'link', bindingId: b?.id || null, level: b?.validity.level || null, linked });
+      out.push({ id: d.id, title: m.title, template: m.template, templateName: this.templates.get(m.template)?.name || null, status: m.status, version: m.version ?? null, summary: m.summary || null, folder: this.folderOf(d), relation: b ? 'binding' : 'link', bindingId: b?.id || null, level: b?.validity.level || null, linked, ...(m.generated ? { generated: true } : {}) });
     }
     return out.sort((a, b) => (a.relation === b.relation ? a.id.localeCompare(b.id) : a.relation === 'binding' ? -1 : 1));
   }
@@ -712,7 +732,7 @@ export class DocLibrary {
   }
 
   // ------------------------------------------------------------ 生命週期
-  create(t, input = {}, principal) {
+  create(t, input = {}, principal, { aiDraft = null } = {}) {
     this.store.assertCanContribute(principal);
     const folderIn = clean(input.folder) ? normalizeFolderPath(input.folder) : null;
     const tpl = this.getTemplate(input.template || (folderIn && this.folderDefaults(folderIn).defaultTemplate) || 'TPL-0001');
@@ -737,7 +757,8 @@ export class DocLibrary {
       ownerIds: [],
       subjects: idList(input.subjects), objects: idList(input.objects), related: idList(input.related),
       objectId: takeover?.id || null, startVersion,
-      fields: {}, folder, createdAt: at, createdBy: by, updatedAt: at, updatedBy: by
+      fields: {}, folder, createdAt: at, createdBy: by, updatedAt: at, updatedBy: by,
+      editors: [by], ...(aiDraft ? { aiDraft } : {})
     };
     if (idList(input.ownerIds).length) {
       if (principal.kind === 'human' && (principal.isAdmin || principal.role === 'owner')) meta.ownerIds = idList(input.ownerIds);
@@ -751,6 +772,7 @@ export class DocLibrary {
     this.store.assertCanContribute(principal);
     const doc = this.get(id);
     if (doc.pub?.meta.status === '已廢止') throw fail(409, 'doc_obsolete', tr('{id} 已廢止，不能修改', { id }));
+    if (doc.pub?.meta.generated) throw this.generatedError(id);
     const base = doc.draft || doc.pub;
     const tpl0 = this.getTemplate(base.meta.template);
     if (doc.pub && !doc.draft && tpl0.immutable) throw fail(409, 'immutable_doc', tr('模板「{name}」的文檔發布後不能修訂；有誤時請廢止並另發一份', { name: tpl0.name }));
@@ -782,6 +804,7 @@ export class DocLibrary {
     }
     meta.updatedAt = nowIso();
     meta.updatedBy = sourceOf(principal);
+    meta.editors = addEditor(meta.editors, meta.updatedBy);
     const body = input.body !== undefined && input.body !== null ? String(input.body) : base.body;
     return this.writeDraft(t, { doc, meta, body, fieldsInput: input.fields !== undefined ? input.fields : meta.fields, principal });
   }
@@ -854,8 +877,11 @@ export class DocLibrary {
       else throw fail(409, 'no_draft', tr('{id} 沒有草稿或修訂', { id }));
     }
     if (doc.pub?.meta.status === '已廢止') throw fail(409, 'doc_obsolete', tr('{id} 已廢止，不能修改', { id }));
+    if (doc.pub?.meta.generated) throw this.generatedError(id);
     const tpl = this.getTemplate(source.meta.template);
     this.assertCanPublish(principal, tpl, doc);
+    const authors = source === doc.pub ? [] : authorsOf(source.meta, { firstVersion: !doc.pub });
+    if (tpl.requireOtherApprover && authors.includes(principal.id)) throw fail(403, 'four_eyes_required', tr('模板「{name}」要求四眼審閱：這一版有你參與編寫，需要另一位負責人審閱並發布', { name: tpl.name }));
     const folder = doc.pub ? folderOfPath(doc.pub.path) : source.meta.folder || DEFAULT_FOLDER;
     const problems = this.lintCurrent(doc, 'publish', source);
     if (hasErrors(problems)) throw this.lintFailed(problems);
@@ -887,6 +913,9 @@ export class DocLibrary {
     const objName = `《${source.meta.title}》`;
     if (obj.name !== objName) obj.name = objName;
     if (!tookOver && obj.locator === `doc://${id}` && source.meta.summary) obj.description = source.meta.summary;
+    // 內置校驗 Action「文檔已發布」：讓綁定文檔客體的綁定可以經校驗升到 L0
+    const validator = this.ensureDocValidator(t);
+    if (!(obj.actionIds || []).includes(validator)) obj.actionIds = [...(obj.actionIds || []), validator];
     obj.updatedAt = at;
     t.touch('object', obj.id);
 
@@ -914,7 +943,9 @@ export class DocLibrary {
     }
 
     const meta = structuredClone(source.meta);
-    for (const k of ['folder', 'startVersion', 'baseVersion', 'reviewNote', 'submittedAt', 'submittedBy']) delete meta[k];
+    const aiDraft = meta.aiDraft || null;
+    const editors = Array.isArray(meta.editors) ? meta.editors : [];
+    for (const k of ['folder', 'startVersion', 'baseVersion', 'reviewNote', 'submittedAt', 'submittedBy', 'aiDraft', 'editors']) delete meta[k];
     meta.status = '已發布';
     meta.version = version;
     meta.objectId = objectId;
@@ -922,7 +953,7 @@ export class DocLibrary {
     const everyDays = Number(doc.pub?.meta.review?.everyDays) || Number(tpl.reviewEveryDays) || null;
     meta.review = everyDays ? { everyDays, nextAt: dateOnly(Date.now() + everyDays * DAY), lastAt: at, lastBy: by.id } : null;
     const author = source.meta.updatedBy?.id || source.meta.createdBy?.id || null;
-    meta.change = { major, note, publishedAt: at, publishedBy: by, approvedBy: by, ...(author === by.id ? { selfApproved: true } : {}), ...(source === doc.pub ? { fromGit: true } : {}) };
+    meta.change = { major, note, publishedAt: at, publishedBy: by, approvedBy: by, ...(author === by.id ? { selfApproved: true } : {}), ...(source === doc.pub ? { fromGit: true } : {}), ...(editors.length ? { authors: editors } : {}), ...(aiDraft ? { aiDraft } : {}) };
     meta.updatedAt = at;
     meta.updatedBy = by;
     const rel = `${DOCS}/${folder}/${fileNameFor(id, meta.title)}`;
@@ -956,7 +987,245 @@ export class DocLibrary {
     let affected = { bindings: [], demoted: [] };
     const obj = m.objectId ? st.objects.get(m.objectId) : null;
     if (obj && obj.status !== '下線') affected = st.takeObjectOffline(t, obj, `文檔 ${id} 已廢止：${reason}`, principal);
-    return { id, title: m.title, replacedBy, objectId: obj?.id || null, affected };
+    const migrated = replacedBy && input.migrate === true ? this.migrateBindings(t, doc, principal) : [];
+    return { id, title: m.title, replacedBy, objectId: obj?.id || null, affected, migrated };
+  }
+
+  /**
+   * 把依據遷移到替代文檔（設計 §6.5 第 4 步）：綁定了舊文檔客體的主體，改為綁定替代文檔的客體（L1，等待確認或校驗）。
+   * 舊綁定保持 E1，歷史可追溯。已經有替代文檔有效綁定的主體跳過。
+   */
+  migrateBindings(t, doc, principal) {
+    const st = this.store;
+    const m = doc.pub.meta;
+    const target = this.docs.get(m.replacedBy);
+    const newObj = target?.pub?.meta.objectId ? st.objects.get(target.pub.meta.objectId) : null;
+    if (!newObj || newObj.status === '下線') { t.warn(tr('替代文檔 {id} 沒有在用的客體，沒有遷移依據', { id: m.replacedBy })); return []; }
+    const out = [];
+    for (const s of st.subjects.values()) {
+      if (!s.bindings.some(b => b.objectId === m.objectId)) continue;
+      if (s.bindings.some(b => b.objectId === newObj.id && b.validity.level !== 'E1')) continue;
+      const b = st.createBinding(t, s.id, { objectId: newObj.id, note: `文檔 ${doc.id} 廢止，依據遷移到 ${target.id}` }, principal);
+      out.push({ subjectId: s.id, bindingId: b.id, objectId: newObj.id, level: b.validity.level });
+    }
+    return out;
+  }
+
+  /** 已廢止的文檔補做「遷移依據」。 */
+  migrateBasis(t, id, principal) {
+    const doc = this.get(id);
+    if (doc.pub?.meta.status !== '已廢止') throw fail(409, 'not_obsolete', tr('{id} 沒有廢止，不需要遷移依據', { id }));
+    if (!doc.pub.meta.replacedBy) throw fail(409, 'no_replacement', tr('{id} 沒有指定替代文檔', { id }));
+    this.assertReviewer(principal, doc);
+    return { id, replacedBy: doc.pub.meta.replacedBy, migrated: this.migrateBindings(t, doc, principal) };
+  }
+
+  /** 修訂影響（第二期）：按改動的章節與斷言、關係的 sourceRef 預選真正受影響的知識。 */
+  impactWithSections(doc) {
+    const items = this.impactOf(doc.pub?.meta.objectId || null);
+    let changes = null;
+    if (doc.pub && doc.draft) {
+      const before = new Map(parseSections(doc.pub.body).map(x => [x.heading.trim().toLowerCase(), x.text]));
+      const after = new Map(parseSections(doc.draft.body).map(x => [x.heading.trim().toLowerCase(), x.text]));
+      changes = new Map();
+      for (const [h, text] of before) changes.set(h, !after.has(h) ? 'removed' : after.get(h) === text ? 'unchanged' : 'modified');
+      for (const h of after.keys()) if (!before.has(h)) changes.set(h, 'added');
+    }
+    const out = items.map(x => {
+      const sec = sectionOfSourceRef(x.sourceRef, doc.id);
+      const change = sec && changes ? changes.get(sec.heading.toLowerCase()) || 'missing' : null;
+      return { ...x, section: sec?.heading || null, sectionChange: change, suggested: !changes || !sec || change !== 'unchanged' };
+    });
+    const changed = changes ? [...changes.entries()].filter(([, c]) => c !== 'unchanged').map(([heading, change]) => ({ heading, change })) : [];
+    return { items: out, changedSections: changed, sectionAware: !!changes };
+  }
+
+  // ------------------------------------------------------------ 內置校驗 Action
+  /** 找到或建立內置的「文檔庫」管道與「文檔已發布」校驗 Action；新建時掛到所有已發布文檔的客體上。返回 Action ID。 */
+  ensureDocValidator(t) {
+    const st = this.store;
+    let pipe = [...st.pipelines.values()].find(p => p.type === 'docs');
+    if (!pipe) {
+      pipe = { id: st.nextId(ID_PREFIX.pipeline), name: '文檔庫（內置）', type: 'docs', description: '內置管道：讀文檔庫中文檔的狀態，不訪問外部系統', baseUrl: null, headers: {}, timeoutMs: 1000, routes: [], builtin: true, updatedAt: nowIso() };
+      st.pipelines.set(pipe.id, pipe);
+      t.touch('pipeline', pipe.id);
+    }
+    let action = [...st.actions.values()].find(a => a.pipelineId === pipe.id && a.kind === '校驗');
+    if (!action) {
+      action = {
+        id: st.nextId(ID_PREFIX.action), name: '文檔已發布', kind: '校驗', builtin: true,
+        description: '內置：客體由文檔庫管理、文檔處於已發布狀態，即客體存在。用於綁定文檔客體的綁定（L1 → L0）',
+        objectKinds: [], pipelineId: pipe.id,
+        request: { method: 'GET', path: '/docs/{object.id}', query: {}, body: null },
+        inputs: [], output: null, check: { mode: 'exists' }, permission: 'contributor', updatedAt: nowIso()
+      };
+      st.actions.set(action.id, action);
+      t.touch('action', action.id);
+      for (const o of st.objects.values()) {
+        const d = o.docId ? this.docs.get(o.docId) : null;
+        if (!d?.pub || d.pub.meta.status !== '已發布' || o.status === '下線' || (o.actionIds || []).includes(action.id)) continue;
+        o.actionIds = [...(o.actionIds || []), action.id];
+        t.touch('object', o.id);
+      }
+    }
+    return action.id;
+  }
+
+  /** 內置管道的「請求」：/docs/O-0001 → 文檔已發布返回 200，否則 404。 */
+  docObjectStatus(objectId) {
+    const o = this.store.objects.get(objectId);
+    const d = o?.docId ? this.docs.get(o.docId) : null;
+    if (!o || !d?.pub) return { status: 404, body: { objectId, error: 'not managed by the document library' } };
+    const m = d.pub.meta;
+    if (m.status !== '已發布' || o.status === '下線') return { status: 410, body: { objectId, docId: d.id, status: m.status } };
+    return { status: 200, body: { objectId, docId: d.id, title: m.title, version: m.version, status: m.status } };
+  }
+
+  // ------------------------------------------------------------ 生成文檔（主體手冊）
+  generatedError(id) {
+    return fail(409, 'generated_doc', tr('{id} 由知識生成，正文只讀；知識變化後請「重新生成」', { id }));
+  }
+
+  /** 主體手冊模板：舊倉庫裡沒有時以下一個模板編號寫入（隨本次提交）。 */
+  handbookTemplate(t) {
+    const found = [...this.templates.values()].find(x => x.generator === 'handbook');
+    if (found) return found;
+    const id = this.templates.has(HANDBOOK_TEMPLATE.id) ? this.store.nextId(ID_PREFIX.template) : HANDBOOK_TEMPLATE.id;
+    if (id === HANDBOOK_TEMPLATE.id) this.store.bumpCounter(id);
+    const tpl = { ...structuredClone(HANDBOOK_TEMPLATE), id };
+    this.templates.set(id, tpl);
+    t.touch('template', id);
+    return tpl;
+  }
+
+  findGenerated(kind, target) {
+    for (const d of this.docs.values()) {
+      const g = d.pub?.meta.generated;
+      if (g && g.kind === kind && g.target === target) return d;
+    }
+    return null;
+  }
+
+  /** 生成或重新生成主體手冊（一個主體）或領域手冊（一個領域）。直接成為已發布版本：內容全部來自知識，沒有新的陳述。 */
+  generate(t, input = {}, principal) {
+    this.assertHuman(principal, tr('智能體和管道不能生成手冊；手冊直接發布，需要由人觸發'));
+    const st = this.store;
+    const kind = input.domain ? 'domain' : 'subject';
+    let target;
+    if (kind === 'subject') {
+      const s = st.getSubject(clean(input.subjectId));
+      if (s.type === '別名') throw fail(422, 'invalid_input', tr('別名沒有自己的知識；請為它指向的規範主體生成手冊'));
+      target = s.id;
+    } else {
+      target = clean(input.domain);
+      if (!st.config.domains?.some(d => d.code === target)) throw fail(422, 'invalid_input', tr('領域 {code} 不存在', { code: target }));
+    }
+    const existing = this.findGenerated(kind, target);
+    if (existing) return this.regenerate(t, existing.id, principal);
+    const tpl = this.handbookTemplate(t);
+    const out = renderHandbook(st, this, { kind, target });
+    const folder = this.ensureFolder(t, clean(input.folder) ? normalizeFolderPath(input.folder) : this.handbookFolder(out.domain), principal, tpl);
+    this.assertUniqueTitle(folder, out.title, null);
+    const id = st.nextId(ID_PREFIX.doc);
+    const by = sourceOf(principal);
+    const at = nowIso();
+    const meta = {
+      id, title: out.title, template: tpl.id, status: '已發布', version: 1, summary: out.summary,
+      tags: this.normalizeTags(['手冊']), owner: null, ownerIds: [],
+      subjects: out.subjects, objects: [], related: out.related, objectId: null, fields: {}, review: null,
+      change: { major: false, note: '由知識生成', publishedAt: at, publishedBy: by, approvedBy: by, generated: true },
+      generated: { kind, target, hash: out.hash, at, by: by.id },
+      createdAt: at, createdBy: by, updatedAt: at, updatedBy: by
+    };
+    this.ensureTags(t, meta.tags);
+    const doc = { id, pub: { path: `${DOCS}/${folder}/${fileNameFor(id, meta.title)}`, meta, body: out.body, etag: null }, draft: null };
+    this.docs.set(id, doc);
+    this.writeEntry(t, doc, 'pub');
+    return { id, title: meta.title, version: 1, created: true, changed: true, folder, path: doc.pub.path };
+  }
+
+  regenerate(t, id, principal) {
+    this.assertHuman(principal, tr('智能體和管道不能生成手冊；手冊直接發布，需要由人觸發'));
+    const doc = this.get(id);
+    const g = doc.pub?.meta.generated;
+    if (!g) throw fail(409, 'not_generated', tr('{id} 不是生成的文檔', { id }));
+    if (doc.pub.meta.status === '已廢止') throw fail(409, 'doc_obsolete', tr('{id} 已廢止，不能修改', { id }));
+    const out = renderHandbook(this.store, this, { kind: g.kind, target: g.target });
+    const m = doc.pub.meta;
+    if (out.hash === g.hash && out.title === m.title && out.body === doc.pub.body) return { id, title: m.title, version: m.version, created: false, changed: false, folder: this.folderOf(doc), path: doc.pub.path };
+    const folder = this.folderOf(doc);
+    if (out.title !== m.title) this.assertUniqueTitle(folder, out.title, id);
+    const by = sourceOf(principal);
+    const at = nowIso();
+    Object.assign(m, {
+      title: out.title, summary: out.summary, subjects: out.subjects, related: out.related, version: (Number(m.version) || 0) + 1,
+      change: { major: false, note: '知識變化後重新生成', publishedAt: at, publishedBy: by, approvedBy: by, generated: true },
+      generated: { ...g, hash: out.hash, at, by: by.id }, updatedAt: at, updatedBy: by
+    });
+    const rel = `${DOCS}/${folder}/${fileNameFor(id, m.title)}`;
+    if (rel !== doc.pub.path) t.removeRaw(doc.pub.path);
+    doc.pub = { path: rel, meta: m, body: out.body, etag: null };
+    this.writeEntry(t, doc, 'pub');
+    return { id, title: m.title, version: m.version, created: false, changed: true, folder, path: rel };
+  }
+
+  /** 手冊放在領域文件夾下的「手冊」子文件夾；找不到領域文件夾時放在「通用/手冊」。 */
+  handbookFolder(domain) {
+    const top = [...this.folders.entries()].find(([p, f]) => !p.includes('/') && f?.domain === domain)?.[0];
+    return `${top || DEFAULT_FOLDER}/手冊`;
+  }
+
+  /** 生成文檔是否落後於知識（知識變化後應重新生成）。 */
+  generatedState(doc) {
+    const g = doc.pub?.meta.generated;
+    if (!g) return null;
+    let stale = false;
+    let missing = false;
+    try { stale = renderHandbook(this.store, this, { kind: g.kind, target: g.target }).hash !== g.hash; } catch { missing = true; }
+    return { ...g, stale, missing };
+  }
+
+  // ------------------------------------------------------------ 從文檔抽取斷言
+  /**
+   * 把文檔中的一段話提取為斷言（設計 §9.4）：證據是文檔的客體，sourceRef 寫「DOC-0001§計算公式 v4」。
+   * 寫入上限照常：有客體證據最高 L1，要晉升 L0 仍需校驗或負責人確認。items 可以一次多條，一次提交。
+   */
+  extractAssertions(t, id, input = {}, principal) {
+    const st = this.store;
+    st.assertCanContribute(principal);
+    const doc = this.get(id);
+    const m = doc.pub?.meta;
+    if (!m || m.status !== '已發布') throw fail(409, 'not_published', tr('{id} 還沒有發布：只能從已發布的版本提取斷言', { id }));
+    if (m.generated) throw fail(409, 'generated_doc', tr('{id} 由知識生成，不能再作為知識的證據', { id }));
+    const obj = m.objectId ? st.objects.get(m.objectId) : null;
+    if (!obj || obj.status === '下線') throw fail(409, 'object_offline', tr('{id} 的客體不在用，不能作為證據', { id }));
+    const sections = parseSections(doc.pub.body);
+    const list = Array.isArray(input.items) ? input.items : [input];
+    if (!list.length || list.length > 50) throw fail(400, 'invalid_input', tr('一次提取 1–50 條'));
+    const created = [];
+    const skipped = [];
+    list.forEach((it, index) => {
+      const subjectId = clean(it?.subjectId);
+      const s = st.getSubject(subjectId);
+      if (s.type === '別名') throw fail(422, 'invalid_input', tr('第 {n} 條：斷言要寫在規範主體上，{id} 是別名', { n: index + 1, id: s.id }));
+      const type = clean(it.type) || '屬性';
+      if (!ASSERTION_TYPES[type]) throw fail(400, 'invalid_input', tr('第 {n} 條：斷言類型必須為 {list}', { n: index + 1, list: Object.keys(ASSERTION_TYPES).join(' / ') }));
+      const content = String(it.content || '').replace(/\[\[([A-Z]+-[A-Z0-9-]+)(#[^\]]*)?\]\]/g, (all, rid) => st.subjects.get(rid)?.name || rid).replace(/\s+/g, ' ').trim();
+      if (!content) throw fail(400, 'invalid_input', tr('第 {n} 條：內容不能為空', { n: index + 1 }));
+      if (content.length > 500) throw fail(400, 'invalid_input', tr('第 {n} 條：一條斷言不超過 500 字；請拆成幾條', { n: index + 1 }));
+      let heading = null;
+      const key = clean(it.anchor) || clean(it.heading);
+      if (key) {
+        const sec = sections.find(x => x.anchor === key || x.heading === key);
+        if (!sec) throw fail(422, 'invalid_input', tr('第 {n} 條：{id} 的當前版本沒有章節「{heading}」', { n: index + 1, id, heading: key }));
+        heading = sec.heading;
+      }
+      if (s.assertions.some(a => a.validity.level !== 'E1' && sameText(a.content, content))) { skipped.push({ index, subjectId, content, reason: tr('{id} 已有相同內容的斷言', { id: subjectId }) }); return; }
+      const sourceRef = heading ? `${id}§${heading} v${m.version}` : `${id} v${m.version}`;
+      const a = st.createAssertion(t, subjectId, { type, content, structured: it.structured || undefined, evidence: { objectIds: [obj.id], sourceRef } }, principal);
+      created.push({ id: a.id, subjectId, type, content, level: a.validity.level, sourceRef });
+    });
+    return { docId: id, version: m.version, objectId: obj.id, created, skipped };
   }
 
   /** 廢止前的影響預覽。 */
@@ -1279,7 +1548,7 @@ export class DocLibrary {
     if (input.id && !existing) throw fail(404, 'not_found', tr('模板 {id} 不存在', { id: input.id }));
     const objectKinds = OBJECT_CATEGORIES.制度.kinds;
     const id = existing ? existing.id : this.store.nextId(ID_PREFIX.template);
-    const tpl = normalizeTemplate({ ...(existing || {}), ...input, i18n: input.i18n ?? existing?.i18n }, { id, objectKinds });
+    const tpl = normalizeTemplate({ ...(existing || {}), ...input, i18n: input.i18n ?? existing?.i18n, generator: existing?.generator }, { id, objectKinds });
     if (tpl.defaultFolder) tpl.defaultFolder = normalizeFolderPath(tpl.defaultFolder);
     this.templates.set(id, tpl);
     t.touch('template', id);
@@ -1331,7 +1600,7 @@ export class DocLibrary {
         return n !== null && n < now;
       }
       case 'broken-refs': return pub?.status === '已發布' && Object.values(this.refsOf(d.pub.body)).some(r => r.state !== 'ok');
-      case 'unlinked': { const m = this.head(d).meta; return !m.subjects.length && !m.objects.length; }
+      case 'unlinked': { const m = this.head(d).meta; return !pub?.generated && !m.subjects.length && !m.objects.length; }
       case 'obsolete': return pub?.status === '已廢止';
       default: return true;
     }
@@ -1433,7 +1702,7 @@ export class DocLibrary {
 
 function revisionMeta(pubMeta) {
   const m = structuredClone(pubMeta);
-  for (const k of ['version', 'change', 'review', 'replacedBy', 'obsoleteReason', 'obsoleteAt', 'obsoleteBy']) delete m[k];
+  for (const k of ['version', 'change', 'review', 'replacedBy', 'obsoleteReason', 'obsoleteAt', 'obsoleteBy', 'generated', 'aiDraft', 'editors']) delete m[k];
   m.status = '草稿';
   m.baseVersion = pubMeta.version ?? null;
   return m;
@@ -1485,7 +1754,12 @@ export const docMessages = {
     if (r.bound.length) parts.push(`綁定 ${r.bound.length} 個主體`);
     return `[文檔] 發布 ${r.id} v${r.version}（${parts.join('，')}）${r.note ? `：${String(r.note).slice(0, 80)}` : ''}`;
   },
-  obsolete: r => `[文檔] 廢止 ${r.id}${r.replacedBy ? `，由 ${r.replacedBy} 替代` : ''}${r.objectId ? `（客體 ${r.objectId} 下線）` : ''}`,
+  obsolete: r => `[文檔] 廢止 ${r.id}${r.replacedBy ? `，由 ${r.replacedBy} 替代` : ''}${r.objectId ? `（客體 ${r.objectId} 下線）` : ''}${r.migrated?.length ? `，依據遷移到 ${r.replacedBy}（${r.migrated.length} 個主體）` : ''}`,
+  migrate: r => `[文檔] ${r.id} 的依據遷移到 ${r.replacedBy}（${r.migrated.length} 個主體）`,
+  aiDraft: r => `[文檔] AI 起草 ${r.id}《${r.title}》`,
+  import: r => `[文檔] 導入 ${r.importedFrom} → ${r.id}《${r.title}》`,
+  generate: r => (r.changed ? `[文檔] ${r.created ? '生成' : '重新生成'}手冊 ${r.id}《${r.title}》v${r.version}` : `[文檔] 手冊 ${r.id} 沒有變化`),
+  extract: r => `[文檔] 從 ${r.docId} v${r.version} 提取 ${r.created.length} 條斷言${r.skipped.length ? `（跳過 ${r.skipped.length} 條重複）` : ''}`,
   review: r => `[文檔] 確認複審 ${r.id}（下次 ${r.review.nextAt}）`,
   organize: r => {
     const c = r.changes || {};

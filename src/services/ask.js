@@ -4,6 +4,7 @@
 import { LEVEL_INFO, LEVEL_RANK } from '../store/model.js';
 import { RuleError } from '../store/validity.js';
 import { tr, currentLocale } from '../i18n/index.js';
+import { tokenize, snippet, plainDocText } from './doc-search.js';
 
 export const DYNAMIC_RE = /多少|幾個|几个|幾件|几件|還有|还有|剩餘|剩余|當前|当前|目前|現在|现在|實時|实时|此刻|狀態|状态|在途|餘量|余量|how many|current|status/i;
 const HISTORY_RE = /以前|之前|過去|过去|曾經|曾经|原來|原来|舊|旧|改成|變更|变更|歷史|历史|是不是不|previous|used to/i;
@@ -167,6 +168,56 @@ export class AskService {
     return { selected: selected.slice(0, 8), best, hasResidual };
   }
 
+  /**
+   * 問答引用文檔（設計 §9.4）：在結構化知識之外，取相關文檔的章節作補充原文。只取已發布、非生成的文檔；
+   * 章節要真正講到問題中的詞，關聯了命中主體（或以文檔為依據）的文檔加權；每篇最多一節，最多 limit 篇。
+   */
+  documentSupplements(question, canonical = [], limit = 3) {
+    const lib = this.store.docs;
+    if (!lib) return [];
+    let q = String(question || '');
+    for (const p of STOP_PHRASES) q = q.split(p).join(' ');
+    const terms = [...new Set(tokenize(q).key)];
+    if (!terms.length) return [];
+    // 問題中主體名稱以外的詞：有的話，章節必須講到其中之一（只講到主體名的章節，結構化知識已經回答了）
+    const names = canonical.flatMap(id => [this.store.subjects.get(id)?.name, ...this.store.aliasesOf(id).map(a => a.name)]).filter(Boolean).map(n => n.toLowerCase());
+    const other = terms.filter(tk => !names.some(n => n.includes(tk)));
+    const bound = new Set();
+    for (const id of canonical) for (const b of this.store.subjects.get(id)?.bindings || []) if (b.validity.level !== 'E1') bound.add(b.objectId);
+    const best = new Map();
+    for (const { doc, side } of lib.visibleEntries(null, { drafts: false, obsolete: false })) {
+      const m = doc.pub?.meta;
+      if (side !== 'pub' || m?.status !== '已發布' || m.generated) continue;
+      const idx = lib.search.index(doc, 'pub');
+      const linked = canonical.some(id => idx.subjects.has(id)) || !!(m.objectId && bound.has(m.objectId));
+      for (const sec of idx.sections) {
+        if (!sec.text) continue;
+        const hit = tk => (sec.head.has(tk) ? 3 : 0) + (sec.body.has(tk) ? 1 : 0);
+        const sc = terms.reduce((n, tk) => n + hit(tk), 0);
+        const otherHits = other.filter(tk => hit(tk) > 0).length;
+        if (sc < 2 || (other.length && !otherHits) || (!linked && sc < 3)) continue;
+        const score = sc + otherHits * 2 + (linked ? 4 : 0);
+        const prev = best.get(doc.id);
+        if (!prev || prev.score < score) best.set(doc.id, { doc, sec, score, linked });
+      }
+    }
+    return [...best.values()].sort((a, b) => b.score - a.score || a.doc.id.localeCompare(b.doc.id)).slice(0, limit).map(({ doc, sec, score, linked }) => {
+      const m = doc.pub.meta;
+      const text = sec.text.length > 600 ? `${sec.text.slice(0, 600)}…` : sec.text;
+      return {
+        docId: doc.id, title: m.title, version: m.version ?? null, anchor: sec.anchor, heading: sec.heading, path: sec.path,
+        snippet: snippet(plainDocText(this.store, sec.text), other.length ? other : terms, 60), text, linked, score,
+        cite: `〔${doc.id}${sec.anchor ? `§${sec.heading}` : ''}·v${m.version}〕`
+      };
+    });
+  }
+
+  /** 模板答案後面附上文檔原文（與知識的引用分開，沒有層級）。 */
+  documentLines(documents) {
+    if (!documents.length) return '';
+    return `\n\n${tr('文檔原文（補充，不屬於結構化知識，沒有層級）：')}\n${documents.map(d => tr('· 《{title}》{section}：{snippet}{cite}', { title: d.title, section: d.anchor ? `§${d.heading}` : '', snippet: d.snippet, cite: d.cite })).join('\n')}`;
+  }
+
   templateAnswer({ cards, realtime, intents, qTokens }) {
     const lines = [];
     const citations = [];
@@ -203,7 +254,7 @@ export class AskService {
     return { covered, answer: lines.join('\n'), citations };
   }
 
-  async llmAnswer({ question, cards, realtime, resolution, model }) {
+  async llmAnswer({ question, cards, realtime, resolution, model, documents = [] }) {
     const slim = cards.map(c => ({
       subject: { id: c.subject.id, name: c.subject.name, type: c.subject.type, definition: c.subject.definition, level: c.subject.level },
       aliases: c.aliases.map(a => a.name),
@@ -219,15 +270,17 @@ export class AskService {
       '3. 庫存數量、訂單狀態等動態值只能使用 realtime 中的實時取值結果，並說明是實時取值；沒有 realtime 時不得給出任何數值。',
       '4. knowledge 中沒有能回答問題的內容時：covered=false，answer 寫「知識庫未收錄：…」並簡述缺什麼；絕不用行業通用知識、公開電商做法或常識補全。',
       `5. 使用與問題相同的語言作答；無法判斷時用${ANSWER_LANGUAGE[currentLocale()] || '繁體中文'}。第 2 條要求寫明的「未經驗證」「不作結論」「已失效」「知識庫未收錄」用作答語言中的等價說法。簡潔、直接。`,
-      '輸出 JSON：{"covered": boolean, "answer": string, "citations": [{"id": string, "level": string}], "missingInfo": string|null}'
+      '6. documents 是文檔原文，只作補充：引用時照抄它的 cite（例如〔DOC-0001§計算公式·v4〕），與知識 ID 的引用分開；文檔原文沒有層級，不能否定或覆蓋 knowledge 中的 L0 知識；covered 只按 knowledge 判斷。',
+      '輸出 JSON：{"covered": boolean, "answer": string, "citations": [{"id": string, "level": string}], "documents": [string], "missingInfo": string|null}'
     ].join('\n');
-    const user = JSON.stringify({ question, aliasResolution: resolution, knowledge: slim, realtime }, null, 0);
+    const docs = documents.map(d => ({ cite: d.cite, title: d.title, heading: d.heading || null, text: d.text }));
+    const user = JSON.stringify({ question, aliasResolution: resolution, knowledge: slim, realtime, documents: docs }, null, 0);
     const r = await this.llm.chatJson({ model, messages: [{ role: 'system', content: system }, { role: 'user', content: user }], maxTokens: 1200 });
     if (!r.json || typeof r.json.answer !== 'string') throw new Error(tr('模型未返回有效 JSON'));
     return { ...r.json, model: r.model, usage: r.usage };
   }
 
-  async ask({ question, subjectIds = [], inputs = {}, compose = 'auto', model, includeKnowledge = true }, principal) {
+  async ask({ question, subjectIds = [], inputs = {}, compose = 'auto', model, includeKnowledge = true, includeDocuments = true }, principal) {
     question = String(question || '').trim();
     if (!question) throw new RuleError(tr('{field} 必填', { field: 'question' }), 400, 'invalid_input');
     if (question.length > 2000) throw new RuleError(tr('問題過長（上限 {n} 字）', { n: 2000 }), 400, 'invalid_input');
@@ -266,7 +319,8 @@ export class AskService {
 
     if (!canonical.length) {
       const gap = store.recordGap({ question, subjectIds: [], principal, reason: '術語未命中任何主體' });
-      return { ...base, status: 'uncovered', answer: tr('知識庫未收錄與此問題相關的主體。已記為知識缺口，不使用行業通用知識補全。'), composer: { type: 'rule' }, citations: [], realtime: [], knowledge: includeKnowledge ? [] : undefined, gap: gap ? { id: gap.id, count: gap.count } : null };
+      const documents = includeDocuments ? this.documentSupplements(question, []) : [];
+      return { ...base, status: 'uncovered', answer: tr('知識庫未收錄與此問題相關的主體。已記為知識缺口，不使用行業通用知識補全。') + this.documentLines(documents), composer: { type: 'rule' }, citations: [], documents, realtime: [], knowledge: includeKnowledge ? [] : undefined, gap: gap ? { id: gap.id, count: gap.count } : null };
     }
 
     store.recordUsage(canonical);
@@ -300,12 +354,13 @@ export class AskService {
     // 3–4. 按層級作答並引用
     const terms = [...resolution.matches.map(m => m.term), ...(fuzzy?.fuzzy || []).map(f => f.term), ...cards.map(c => c.subject.name), ...cards.flatMap(c => c.aliases.map(a => a.name))];
     const qTokens = tokensOf(residualOf(question, terms));
+    const documents = includeDocuments && !(intents.dynamic && okRealtime.length) ? this.documentSupplements(question, canonical) : [];
     let result;
     let composer = { type: 'template' };
     const useLlm = compose === 'llm' || (compose === 'auto' && this.llm?.enabled);
     if (useLlm) {
       try {
-        const r = await this.llmAnswer({ question, cards, realtime: okRealtime, resolution: base.resolution, model });
+        const r = await this.llmAnswer({ question, cards, realtime: okRealtime, resolution: base.resolution, model, documents });
         const known = new Map();
         for (const c of cards) {
           for (const a of c.assertions) known.set(a.id, { kind: 'assertion', level: a.level, content: a.content, subjectId: c.subject.id });
@@ -315,6 +370,8 @@ export class AskService {
         }
         for (const rt of okRealtime) known.set(rt.actionId, { kind: 'action', level: null, content: rt.name });
         const citations = (r.citations || []).map(c => (typeof c === 'string' ? c : c?.id)).filter(id => known.has(id)).map(id => ({ id, ...known.get(id) }));
+        const usedDocs = new Set((Array.isArray(r.documents) ? r.documents : []).map(String));
+        for (const d of documents) d.cited = usedDocs.has(d.cite) || r.answer.includes(d.cite);
         result = { covered: r.covered !== false, answer: r.answer, citations: [...new Map(citations.map(c => [c.id, c])).values()], missingInfo: r.missingInfo || null };
         composer = { type: 'openrouter', model: r.model, usage: r.usage };
       } catch (err) {
@@ -326,6 +383,7 @@ export class AskService {
       const t = this.templateAnswer({ cards, realtime: okRealtime, intents, qTokens });
       result = { ...t, missingInfo: null };
       if (!t.covered) result.answer = '';
+      else result.answer += this.documentLines(documents);
     }
 
     // 5. 未收錄就說未收錄
@@ -334,13 +392,13 @@ export class AskService {
       const names = cards.map(c => named(c.subject.name, c.subject.id)).join(tr('、'));
       return {
         ...base, status: 'uncovered',
-        answer: composer.type === 'openrouter' && result.answer ? result.answer : tr('知識庫未收錄：已找到相關主體 {names}，但其中沒有能回答此問題的知識。已記為知識缺口，不使用行業通用知識補全。', { names }),
-        composer, citations: [], realtime, knowledge: includeKnowledge ? cards : undefined, gap: gap ? { id: gap.id, count: gap.count } : null, missingInfo: result.missingInfo
+        answer: composer.type === 'openrouter' && result.answer ? result.answer : tr('知識庫未收錄：已找到相關主體 {names}，但其中沒有能回答此問題的知識。已記為知識缺口，不使用行業通用知識補全。', { names }) + this.documentLines(documents),
+        composer, citations: [], documents, realtime, knowledge: includeKnowledge ? cards : undefined, gap: gap ? { id: gap.id, count: gap.count } : null, missingInfo: result.missingInfo
       };
     }
     const lowest = result.citations.filter(c => c.level).map(c => c.level);
     return {
-      ...base, status: 'answered', answer: result.answer, composer, citations: result.citations, realtime,
+      ...base, status: 'answered', answer: result.answer, composer, citations: result.citations, documents, realtime,
       needInputs: needInputs.length ? needInputs : undefined,
       reliability: lowest.length ? { levels: [...new Set(lowest)], note: lowest.some(l => l !== 'L0') ? tr('答案包含非 L0 知識，請按層級標註使用') : tr('答案依據均為 L0') } : null,
       knowledge: includeKnowledge ? cards : undefined,

@@ -175,6 +175,7 @@ export class KnowledgeStore {
         }
         if (kind === 'relation') doc.validity = normalizeValidity(doc.validity);
         if (kind === 'object') doc.actionIds ||= [];
+        if (kind === 'template') { doc.fields ||= []; doc.sections ||= []; }
         this[COLLECTION[kind]].set(doc.id, doc);
         this.bumpCounter(doc.id);
         if (kind === 'subject') {
@@ -1147,6 +1148,7 @@ export class KnowledgeStore {
   upsertPipeline(t, input, principal) {
     this.assertOwner(principal);
     if (!PIPELINE_TYPES[input.type]) throw new RuleError(tr('管道類型必須為：{list}', { list: Object.keys(PIPELINE_TYPES).join(tr('、')) }), 400);
+    if (input.type === 'docs' || this.pipelines.get(input.id)?.builtin) throw new RuleError(tr('文檔庫管道由系統建立和維護，不能手動新增或修改'), 400, 'builtin');
     if (!clean(input.name)) throw new RuleError(tr('管道名稱必填'), 400);
     if (input.type === 'http' && !/^https?:\/\//.test(input.baseUrl || '')) throw new RuleError(tr('http 管道需要 baseUrl（http/https）'), 400);
     for (const v of Object.values(input.headers || {})) if (/^(bearer|basic)\s+[a-z0-9._-]{12,}/i.test(String(v)) && !String(v).includes('${env:')) throw new RuleError(tr('請勿把憑證明文寫入知識倉庫；使用 ${env:變數名} 引用環境變數'), 400, 'secret_in_repo');
@@ -1169,6 +1171,7 @@ export class KnowledgeStore {
     if (!ACTION_KINDS[input.kind]) throw new RuleError(tr('Action 種類必須為 校驗 / 取值（MVP 只讀不寫）'), 400);
     if (!clean(input.name)) throw new RuleError(tr('Action 名稱必填'), 400);
     if (!this.pipelines.has(input.pipelineId)) throw new RuleError(tr('管道 {id} 不存在', { id: input.pipelineId }), 422);
+    if (this.pipelines.get(input.pipelineId).type === 'docs' || this.actions.get(input.id)?.builtin) throw new RuleError(tr('內置 Action 由系統建立和維護，不能手動新增或修改'), 400, 'builtin');
     if (this.pipelines.get(input.pipelineId).type === 'rpa') return this.upsertRpaAction(t, input, principal);
     if (input.request?.method && !['GET', 'HEAD', 'POST'].includes(String(input.request.method).toUpperCase())) throw new RuleError(tr('MVP 只讀：請求方法限 GET / HEAD / POST（查詢類）'), 400);
     const id = input.id && this.actions.has(input.id) ? input.id : this.nextId(ID_PREFIX.action);
