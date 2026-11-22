@@ -171,6 +171,31 @@ export class ActionRunner {
     return { ...result, outcome, detail: shown, commit, action: { id: action.id, name: action.name }, request: { url: r.url, status: r.status } };
   }
 
+  /**
+   * 批量校驗所選主體：主體的斷言、綁定，以及以它為起點的關係中，未失效、能找到合適校驗 Action 的條目逐條校驗。
+   * RPA 校驗照單條方式異步受理（進度在執行記錄），其餘同步返回結果；沒有可用 Action 的條目計入 noAction。
+   */
+  async validateSubjects(subjectIds, principal, { max = 500 } = {}) {
+    const ids = new Set((subjectIds || []).map(String));
+    if (!ids.size) throw new RuleError(tr('請提供 subjectIds'), 400, 'invalid_input');
+    const refs = this.store.allValidityItems().filter(ref => ref.subject && ids.has(ref.subject.id) && ref.item.validity.level !== 'E1');
+    const runnable = [];
+    let noAction = 0;
+    for (const ref of refs) (this.store.findValidateAction(ref) ? runnable.push(ref) : noAction++);
+    if (runnable.length > max) throw new RuleError(tr('可校驗的條目有 {n} 條，超過單次上限 {max}；請少選一些主體', { n: runnable.length, max }), 400, 'too_many_items');
+    const results = [];
+    for (const ref of runnable) {
+      try {
+        const out = await this.validateItem(ref.item.id, principal);
+        results.push(out.async ? { id: ref.item.id, outcome: 'async', executionId: out.execution.id } : out);
+      } catch (err) {
+        results.push({ id: ref.item.id, outcome: 'error', detail: err.message });
+      }
+    }
+    const count = o => results.filter(r => r.outcome === o).length;
+    return { subjects: ids.size, total: results.length, passed: count('pass'), mismatched: count('mismatch'), missing: count('missing'), errors: count('error'), async: count('async'), noAction, results };
+  }
+
   /** 定期校驗：對所有配置了校驗 Action 的知識執行一次。 */
   async validateAll(principal, { onlyPending = false } = {}) {
     const results = [];

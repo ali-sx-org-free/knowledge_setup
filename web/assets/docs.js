@@ -4,6 +4,8 @@
 import { $, $$, esc, icon, setHeading, toast, modal, closeModal, showError, download, copy, api, get, post, put, patch, del, level, pill, vpill, idLink, fmtTime, ago, panel, table, formData, field, input, select, textarea, LEVEL_TEXT, ApiError } from './core.js';
 import { t, tk, tv, td, locale } from './i18n.js';
 import { renderMarkdown, parseSections } from './markdown.js';
+import { savedViews, saveViews } from './workspace.js';
+import { setPageKeys } from './keys.js';
 
 let ctx = null;
 const me = () => ctx?.me() || null;
@@ -409,6 +411,7 @@ async function pageLibrary() {
     <aside class="panel docs-preview" id="docs-preview" aria-live="polite"></aside>
   </div>`;
 
+  const currentQuery = () => qs({ q: st.q, folder: st.folder, view: st.view, template: st.template, status: st.status, tag: st.tag, mode: st.mode === 'list' ? '' : st.mode });
   const syncUrl = () => {
     const q = qs({ q: st.q, folder: st.folder, view: st.view, template: st.template, status: st.status, tag: st.tag, mode: st.mode === 'list' ? '' : st.mode, sel: st.sel });
     history.replaceState(null, '', `#docs${q ? `?${q}` : ''}`);
@@ -435,7 +438,11 @@ async function pageLibrary() {
       }
     };
     walk('');
+    // 我的視圖：和主體工作台一樣存在服務端，按登入身份分開，換瀏覽器也在
+    const curQ = currentQuery();
+    const mine = savedViews('docs').map(v => `<div class="docs-nav-row${curQ === v.query ? ' active' : ''}"><a href="#docs${v.query ? `?${v.query}` : ''}" class="grow docs-saved"><span class="nav-icon">${icon('star')}</span> ${esc(v.name)}</a><button type="button" class="text-btn" data-del-view="${esc(v.id)}" aria-label="${esc(t('刪除視圖 {name}', { name: v.name }))}" title="${esc(t('刪除視圖 {name}', { name: v.name }))}">×</button></div>`).join('');
     $('#docs-nav').innerHTML = `<div class="docs-nav-section"><h3>${t('智能視圖')}</h3>${viewRows}</div>
+      <div class="docs-nav-section"><h3>${t('我的視圖')}</h3>${mine}<button type="button" class="text-btn docs-save-view" id="docs-save-view">${t('+ 保存當前')}</button></div>
       <div class="docs-nav-section"><h3 data-drop-root="1"><a href="#docs" data-folder-link="">${t('文件夾')}</a></h3>${rows.join('') || `<p class="muted">${t('還沒有文件夾')}</p>`}</div>
       ${canWrite() ? `<div class="docs-nav-foot"><button type="button" class="button" id="new-folder">${t('+ 新建文件夾')}</button></div>` : ''}`;
   }
@@ -627,6 +634,20 @@ async function pageLibrary() {
   // ---- 事件
   const root = $('#docs-root');
   root.addEventListener('click', async e => {
+    if (e.target.closest('#docs-save-view')) {
+      return modal(t('保存為視圖'), field(t('名稱'), input('name', '', 'required maxlength="40"')) + `<p class="muted small">${esc(t('記下目前的文件夾、智能視圖、搜索和篩選；只有你看得到，換瀏覽器也在。'))}</p>`, {
+        label: t('保存'),
+        run: async () => {
+          const name = $('#dialog-content [name=name]').value.trim();
+          if (!name) throw new Error(t('請填寫名稱'));
+          await saveViews('docs', [...savedViews('docs'), { name, query: currentQuery() }]);
+          toast(t('已保存視圖「{name}」', { name }));
+          renderNav();
+        }
+      });
+    }
+    const dv = e.target.closest('[data-del-view]');
+    if (dv) { await saveViews('docs', savedViews('docs').filter(v => v.id !== dv.dataset.delView)).catch(showError); return renderNav(); }
     const viewLink = e.target.closest('[data-view]');
     const folderLink = e.target.closest('[data-folder-link]');
     const toggle = e.target.closest('[data-toggle]');
@@ -755,6 +776,22 @@ async function pageLibrary() {
   $('#docs-import')?.addEventListener('click', () => importDialog(st.folder).catch(showError));
   $('#docs-ai')?.addEventListener('click', () => aiDraftDialog({ folder: st.folder }).catch(showError));
   $('#docs-handbook')?.addEventListener('click', () => handbookDialog({ domain: folderSetting(st.folder, 'domain') || '' }).catch(showError));
+  // 快捷鍵與主體工作台一致：/ 搜索、j / k 上一篇下一篇（預覽跟著換）、Enter 打開、n 新建
+  const moveDoc = delta => {
+    const rows = $$('#docs-list tr[data-id]');
+    if (!rows.length) return;
+    const i = rows.findIndex(r => r.dataset.id === st.sel);
+    const next = rows[Math.max(0, Math.min(rows.length - 1, i < 0 ? 0 : i + delta))];
+    next.click();
+    next.scrollIntoView({ block: 'nearest' });
+  };
+  setPageKeys([
+    { keys: '/', desc: t('聚焦文檔搜索'), run: () => { $('#d-q').focus(); $('#d-q').select(); } },
+    { keys: 'j,ArrowDown', desc: t('下一篇（預覽跟著換）'), run: () => moveDoc(1) },
+    { keys: 'k,ArrowUp', desc: t('上一篇'), run: () => moveDoc(-1) },
+    { keys: 'Enter', desc: t('打開'), when: () => !!st.sel, run: () => { location.hash = `doc/${st.sel}`; } },
+    ...(canWrite() ? [{ keys: 'n', desc: t('新建文檔'), run: () => openNewDoc({ folder: st.folder }).catch(showError) }] : [])
+  ]);
   syncUrl();
   renderNav();
   renderSuggest();
@@ -1591,8 +1628,8 @@ async function pageTags() {
   const owner = isOwner();
   setActions(owner ? `<button class="button" id="tag-merge">${t('合併標籤')}</button>` : '');
   const groups = [...new Set(d.tags.map(x => x.group || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
-  const row = x => `<tr><td>${docTag(x.name)}</td><td class="wrap-sm">${esc(x.description || '—')}</td><td class="numeric"><a href="#docs?tag=${enc(x.name)}">${x.count}</a></td><td>${x.lastUsedAt ? ago(x.lastUsedAt) : '—'}</td><td>${owner ? `<div class="cell-actions"><button type="button" class="text-btn" data-tag-edit="${esc(x.name)}">${t('編輯')}</button><button type="button" class="text-btn" data-tag-merge="${esc(x.name)}">${t('合併到…')}</button></div>` : ''}</td></tr>`;
-  const head = [t('標籤'), t('說明'), '#' + t('文檔'), t('最近使用'), t('操作')];
+  const row = x => `<tr><td>${docTag(x.name)}</td><td class="wrap-sm">${esc(x.description || '—')}</td><td class="numeric"><a href="#docs?tag=${enc(x.name)}">${x.count}</a></td><td class="numeric"><a href="#subjects?view=all&tag=${enc(x.name)}">${x.subjects || 0}</a></td><td>${x.lastUsedAt ? ago(x.lastUsedAt) : '—'}</td><td>${owner ? `<div class="cell-actions"><button type="button" class="text-btn" data-tag-edit="${esc(x.name)}">${t('編輯')}</button><button type="button" class="text-btn" data-tag-merge="${esc(x.name)}">${t('合併到…')}</button></div>` : ''}</td></tr>`;
+  const head = [t('標籤'), t('說明'), '#' + t('文檔'), '#' + t('主體'), t('最近使用'), t('操作')];
   const rare = d.tags.filter(x => x.count <= 1);
   const merged = Object.entries(d.merged || {});
   content().innerHTML = `<div class="two-col" id="tags-root"><div class="stack">${groups.map(g => panel(esc(g || t('未分組')), table(head, d.tags.filter(x => (x.group || '') === g).map(row)))).join('') || panel(t('標籤'), `<div class="panel-body muted">${t('還沒有標籤：在文檔上加標籤後會自動出現在這裡。')}</div>`)}</div>
@@ -1602,15 +1639,15 @@ async function pageTags() {
   const groupList = `<datalist id="tag-groups">${[...new Set(d.tags.map(x => x.group).filter(Boolean))].map(g => `<option value="${esc(g)}">`).join('')}</datalist>`;
   const editDialog = name => {
     const x = d.tags.find(y => y.name === name);
-    modal(t('編輯標籤 {name}', { name }), `${groupList}${field(t('名稱（改名會改寫 {n} 篇文檔）', { n: x.count }), input('newName', x.name, 'required maxlength="30"'))}<div class="field-pair">${field(t('分組'), input('group', x.group || '', 'list="tag-groups"'))}${field(t('顏色'), select('color', [['', t('預設')], ...d.colors.map(c => [c, c])], x.color || ''))}</div>${field(t('說明'), input('description', x.description || ''))}`, {
+    modal(t('編輯標籤 {name}', { name }), `${groupList}${field(t('名稱（改名會改寫 {n} 篇文檔、{m} 個主體）', { n: x.count, m: x.subjects || 0 }), input('newName', x.name, 'required maxlength="30"'))}<div class="field-pair">${field(t('分組'), input('group', x.group || '', 'list="tag-groups"'))}${field(t('顏色'), select('color', [['', t('預設')], ...d.colors.map(c => [c, c])], x.color || ''))}</div>${field(t('說明'), input('description', x.description || ''))}`, {
       label: t('保存'),
-      run: async () => { const r = await put(`/api/v1/doc-tags/${enc(name)}`, formData($('#dialog-content'))); toast(r.data.renamed ? t('已重命名，改寫了 {n} 篇文檔', { n: r.data.renamed.docs }) : t('已保存')); cache.tags = null; ctx.render(); }
+      run: async () => { const r = await put(`/api/v1/doc-tags/${enc(name)}`, formData($('#dialog-content'))); toast(r.data.renamed ? t('已重命名，改寫了 {n} 篇文檔、{m} 個主體', { n: r.data.renamed.docs, m: r.data.renamed.subjects || 0 }) : t('已保存')); cache.tags = null; ctx.render(); }
     });
   };
   const mergeDialog = from => {
     modal(t('合併標籤'), `${tagDatalist()}<p class="notice">${t('把選中的標籤合併到目標標籤：所有用到它們的文檔一起改寫，一次提交；舊名記入合併記錄，繼續可用。')}</p>${field(t('合併這些標籤'), `<select name="from" multiple size="${Math.min(8, Math.max(3, d.tags.length))}">${d.tags.map(x => `<option value="${esc(x.name)}" ${x.name === from ? 'selected' : ''}>${esc(x.name)}（${x.count}）</option>`).join('')}</select>`)}${field(t('合併到'), input('to', '', 'required list="tag-options"'))}`, {
       label: t('合併'),
-      run: async () => { const f = formData($('#dialog-content')); const r = await post('/api/v1/doc-tags/merge', { from: f.from, to: f.to.trim() }); toast(t('已合併到「{to}」，改寫了 {n} 篇文檔', { to: r.data.to, n: r.data.docs })); cache.tags = null; ctx.render(); }
+      run: async () => { const f = formData($('#dialog-content')); const r = await post('/api/v1/doc-tags/merge', { from: f.from, to: f.to.trim() }); toast(t('已合併到「{to}」，改寫了 {n} 篇文檔、{m} 個主體', { to: r.data.to, n: r.data.docs, m: r.data.subjects || 0 })); cache.tags = null; ctx.render(); }
     });
   };
   $('#tags-root').addEventListener('click', e => {
@@ -1696,7 +1733,7 @@ async function pageSearch() {
   const docRows = r.documents.map(d => `<div class="search-doc"><div><a href="${hrefOfDoc(d.id, d.match?.anchor)}"><strong>${highlight(d.title, terms)}</strong></a> <span class="mono muted small">${esc(d.id)}</span> ${statusBadges(d, { review: false })}${d.generated ? ` ${pill(t('生成的手冊'), 'blue')}` : ''}</div><div class="muted small">${esc(tplLabel(d.template))} · ${esc(d.folder)}${d.match?.heading ? ` · §${esc(d.match.heading)}` : ''}</div>${d.match?.snippet ? `<p class="search-snippet">${highlight(d.match.snippet, terms)}</p>` : d.summary ? `<p class="search-snippet">${highlight(d.summary, terms)}</p>` : ''}${d.tags?.length ? `<div class="chip-row">${tagsHtml(d.tags)}</div>` : ''}</div>`);
   const amb = r.resolved?.ambiguous?.length ? `<p class="notice warn">${esc(r.resolved.ambiguous.map(a => t('「{term}」是多義別名：{list}', { term: a.term, list: a.candidates.join(t('、')) })).join(t('；')))}</p>` : '';
   content().innerHTML = `${amb}<div class="stack">
-    ${panel(t('主體（{n}）', { n: r.subjectTotal }), table(['ID', t('名稱 / 定義'), t('類型'), t('領域'), t('綜合層級'), '#' + t('斷言'), '#' + t('文檔'), t('命中')], subjRows, t('沒有匹配的主體')), r.subjectTotal > r.subjects.length ? `<a class="text-btn" href="#subjects?q=${enc(q)}">${t('全部 {n} 個', { n: r.subjectTotal })}</a>` : '')}
+    ${panel(t('主體（{n}）', { n: r.subjectTotal }), table(['ID', t('名稱 / 定義'), t('類型'), t('領域'), t('綜合層級'), '#' + t('斷言'), '#' + t('文檔'), t('命中')], subjRows, t('沒有匹配的主體')), r.subjectTotal ? `<a class="text-btn" href="#subjects?q=${enc(q)}">${t('在主體工作台中查看全部 {n} 個', { n: r.subjectTotal })}</a>` : '')}
     ${panel(t('文檔（{n}）', { n: r.documentTotal }), docRows.length ? `<div class="panel-body search-docs">${docRows.join('')}</div>` : `<p class="panel-body muted">${t('沒有匹配的文檔')}</p>`, `<a class="text-btn" href="#docs?q=${enc(q)}">${t('在文檔庫中搜索')}</a>`)}
   </div>`;
 }

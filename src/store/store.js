@@ -16,6 +16,7 @@ import { tr, tk } from '../i18n/index.js';
 import { normalizeRpaBaseUrl, normalizePipelineRpa, normalizeRpaAction, actionHash } from './rpa.js';
 import { DocLibrary, DOCS_README } from './docs.js';
 import { BUILTIN_TEMPLATES } from './doc-templates.js';
+import { derived, querySubjects, subjectFacets, similarSubjects } from './subject-query.js';
 
 const DIRS = {
   subject: 'subjects',
@@ -75,6 +76,8 @@ export class KnowledgeStore {
     this.pushTimer = null;
     this.pushing = Promise.resolve();
     this.docs = new DocLibrary(this);
+    // 寫入計數：每次 t.touch()、事務結束、重新載入時遞增；派生索引（別名、狀態標記）按它快取
+    this.gen = 0;
     this.resetMemory();
   }
 
@@ -83,6 +86,7 @@ export class KnowledgeStore {
   }
 
   resetMemory() {
+    this.gen = (this.gen || 0) + 1;
     for (const c of Object.values(COLLECTION)) this[c] = new Map();
     this.assertionIndex = new Map();
     this.bindingIndex = new Map();
@@ -275,18 +279,21 @@ export class KnowledgeStore {
         configChanged: false,
         rawWrites: new Map(),
         rawRemoves: new Set(),
-        touch: (kind, id) => t.touched.add(`${kind}:${id}`),
-        remove: (kind, id) => { t.removed.add(`${kind}:${id}`); t.touched.delete(`${kind}:${id}`); },
+        touch: (kind, id) => { t.touched.add(`${kind}:${id}`); this.gen++; },
+        remove: (kind, id) => { t.removed.add(`${kind}:${id}`); t.touched.delete(`${kind}:${id}`); this.gen++; },
         writeRaw: (rel, content) => { t.rawWrites.set(rel, content); t.rawRemoves.delete(rel); },
         removeRaw: rel => { t.rawRemoves.add(rel); t.rawWrites.delete(rel); },
         warn: w => t.warnings.push(w)
       };
       let result;
+      this.gen++;
       try {
         result = await fn(t);
       } catch (err) {
         await this.load();
         throw err;
+      } finally {
+        this.gen++;
       }
       try {
         await this.persist(t);
@@ -403,18 +410,17 @@ export class KnowledgeStore {
     return { id: s.id, name: s.name, type: s.type, domain: s.domain, level: s.type === '別名' ? null : this.subjectLevel(s) };
   }
 
+  /** 別名指向的規範主體（走派生索引，不再每次掃描全部關係）。 */
   aliasTargets(aliasSubject) {
-    return [...this.relations.values()].filter(r => r.type === '別名' && r.from === aliasSubject.id && r.validity.level !== 'E1').map(r => r.to);
+    return [...(derived(this).aliasTargets.get(aliasSubject.id) || [])];
   }
 
   aliasesOf(subjectId) {
-    return [...this.relations.values()]
-      .filter(r => r.type === '別名' && r.to === subjectId && r.validity.level !== 'E1')
-      .map(r => {
-        const a = this.subjects.get(r.from);
-        const targets = a ? this.aliasTargets(a) : [];
-        return { id: r.from, name: a?.name, relationId: r.id, level: r.validity.level, ambiguous: targets.length > 1, targets };
-      });
+    const d = derived(this);
+    return (d.aliasesOf.get(subjectId) || []).map(x => {
+      const targets = d.aliasTargets.get(x.id) || [];
+      return { id: x.id, name: this.subjects.get(x.id)?.name, relationId: x.relationId, level: x.level, ambiguous: targets.length > 1, targets: [...targets] };
+    });
   }
 
   actionsForSubject(subject) {
@@ -428,28 +434,27 @@ export class KnowledgeStore {
     return [...ids].map(id => this.actions.get(id)).filter(Boolean);
   }
 
+  /** 舊接口：按單值條件列出主體（只返回當前頁的行）。新的多值篩選、聯動計數見 querySubjects / subjectFacets。 */
   listSubjects({ q, type, domain, level, limit = 500 } = {}) {
-    const nq = q ? String(q).toLowerCase() : '';
-    const out = [];
-    for (const s of this.subjects.values()) {
-      if (type && s.type !== type) continue;
-      if (domain && s.domain !== domain) continue;
-      const lvl = s.type === '別名' ? null : this.subjectLevel(s);
-      if (level && lvl !== level) continue;
-      if (nq) {
-        const hay = [s.id, s.name, s.definition, ...(s.tags || []), ...this.aliasesOf(s.id).map(a => a.name)].join(' ').toLowerCase();
-        if (!hay.includes(nq)) continue;
-      }
-      out.push({
-        id: s.id, name: s.name, type: s.type, domain: s.domain, owner: s.owner, definition: s.definition,
-        level: lvl, assertions: s.assertions.length, bindings: s.bindings.length,
-        aliasOf: s.type === '別名' ? this.aliasTargets(s) : undefined,
-        usage: this.usage.subjects[s.id]?.count || 0,
-        pending: [...s.assertions, ...s.bindings].filter(x => x.validity.pending).length,
-        updatedAt: s.updatedAt
-      });
-    }
-    return out.sort((a, b) => a.id.localeCompare(b.id)).slice(0, limit);
+    return querySubjects(this, { q, type, domain, level, limit }).rows;
+  }
+
+  /** 主體工作台的列表：多值篩選、狀態標記、視圖、排序與分頁；返回 { rows, total, offset, limit }。 */
+  querySubjects(params, opts) {
+    return querySubjects(this, params, opts);
+  }
+
+  subjectFacets(params, opts) {
+    return subjectFacets(this, params, opts);
+  }
+
+  similarSubjects(name, opts) {
+    return similarSubjects(this, name, opts);
+  }
+
+  /** 條目的審閱版本：審閱後內容有變（例如被改寫或重新定級）時批量確認會被拒絕。 */
+  reviewVersion(item) {
+    return reviewVersion(item);
   }
 
   listAssertions({ level, type, subjectId, q, pending } = {}) {
@@ -471,7 +476,7 @@ export class KnowledgeStore {
   listRelations({ type, level, subjectId } = {}) {
     return [...this.relations.values()]
       .filter(r => (!type || r.type === type) && (!level || r.validity.level === level) && (!subjectId || r.from === subjectId || r.to === subjectId))
-      .map(r => this.relationView(r))
+      .map(r => ({ ...this.relationView(r), reviewVersion: reviewVersion(r) }))
       .sort((a, b) => a.id.localeCompare(b.id));
   }
 
@@ -510,7 +515,7 @@ export class KnowledgeStore {
     const rel = r => ({ id: r.id, type: r.type, level: r.validity.level, usage: levelUsage(r.validity.level), from: this.subjectSummary(this.subjects.get(r.from)), to: this.subjectSummary(this.subjects.get(r.to)), validity: strip(r.validity) });
     const actions = this.actionsForSubject(s).map(a => ({ id: a.id, name: a.name, kind: a.kind, inputs: a.inputs || [], output: a.output || null, description: a.description || null }));
     return {
-      subject: { id: s.id, name: s.name, type: s.type, domain: s.domain, definition: s.definition, owner: s.owner, level: this.subjectLevel(s), levelNote: tr('綜合層級 = 所有有效客體綁定中的最高層級；沒有有效綁定時為 L2'), errorCost: s.errorCost ?? 3, tags: s.tags, updatedAt: s.updatedAt },
+      subject: { id: s.id, name: s.name, type: s.type, domain: s.domain, definition: s.definition, owner: s.owner, ownerIds: s.ownerIds || [], level: this.subjectLevel(s), levelNote: tr('綜合層級 = 所有有效客體綁定中的最高層級；沒有有效綁定時為 L2'), errorCost: s.errorCost ?? 3, expiryDays: s.expiryDays ?? null, tags: s.tags || [], updatedAt: s.updatedAt },
       aliases: this.aliasesOf(s.id),
       bindings,
       assertions,
@@ -680,10 +685,11 @@ export class KnowledgeStore {
       ownerIds: Array.isArray(input.ownerIds) ? input.ownerIds : [],
       errorCost: input.errorCost ? Math.min(5, Math.max(1, Number(input.errorCost))) : 3,
       expiryDays: input.expiryDays ? Number(input.expiryDays) : null,
-      tags: Array.isArray(input.tags) ? input.tags.map(String) : [],
+      tags: this.docs.normalizeTags(Array.isArray(input.tags) ? input.tags : []),
       createdAt: nowIso(), updatedAt: nowIso(), createdBy: sourceOf(principal),
       bindings: [], assertions: []
     };
+    if (s.tags.length) this.docs.ensureTags(t, s.tags);
     this.subjects.set(id, s);
     t.touch('subject', id);
     if (s.type === '別名') {
@@ -715,7 +721,11 @@ export class KnowledgeStore {
       this.assertOwner(principal, s);
       s.ownerIds = Array.isArray(patch.ownerIds) ? patch.ownerIds : [];
     }
-    if (patch.tags !== undefined) s.tags = Array.isArray(patch.tags) ? patch.tags.map(String) : [];
+    if (patch.tags !== undefined) {
+      // 主體標籤與文檔共用一份標籤字典（docs/_tags.yaml）：按字典規範名保存，新標籤自動加入字典
+      s.tags = this.docs.normalizeTags(Array.isArray(patch.tags) ? patch.tags : []);
+      this.docs.ensureTags(t, s.tags);
+    }
     s.updatedAt = nowIso();
     t.touch('subject', id);
     return s;
@@ -888,8 +898,8 @@ export class KnowledgeStore {
     return a;
   }
 
-  createRelation(t, input, principal) {
-    this.assertCanContribute(principal);
+  /** 新增關係前的規則檢查（類型閉集、方向、別名規則、重複）；不修改數據。批量新增關係用它算出跳過原因。 */
+  checkRelation(input) {
     const def = RELATION_TYPES[input.type];
     if (!def) throw new RuleError(tr('關係類型必須為閉集之一：{list}；新增類型須經負責人評審', { list: Object.keys(RELATION_TYPES).join(tr('、')) }), 400, 'invalid_relation_type');
     const from = this.getSubject(input.from);
@@ -901,6 +911,12 @@ export class KnowledgeStore {
     }
     const dup = [...this.relations.values()].find(r => r.from === from.id && r.to === to.id && r.type === input.type && r.validity.level !== 'E1');
     if (dup) throw new RuleError(tr('關係已存在：{id}', { id: dup.id }), 409, 'duplicate_relation');
+    return { def, from, to };
+  }
+
+  createRelation(t, input, principal) {
+    this.assertCanContribute(principal);
+    const { from, to } = this.checkRelation(input);
     const r = { id: this.nextId(ID_PREFIX.relation), from: from.id, type: input.type, to: to.id, note: clean(input.note) || null, createdAt: nowIso() };
     r.validity = this.buildValidity(input, principal, t);
     if (r.type === '擁有' && r.validity.level === 'L0') this.assertSingleOwner(r);
@@ -943,6 +959,17 @@ export class KnowledgeStore {
       const ref = this.getItem(id);
       if (ref.kind !== 'assertion' || ref.item.validity.level !== 'L1' || reviewVersion(ref.item) !== version) {
         throw new RuleError(tr('斷言 {id} 已變更，請重新整理並核對後再審批', { id }), 409, 'stale_assertion');
+      }
+      return this.confirm(t, id, { note }, principal);
+    });
+  }
+
+  /** 批量確認（斷言、綁定、關係）：每條都必須仍是 L1 且與審閱時的版本一致，否則整批回滾。 */
+  confirmItems(t, items, note, principal) {
+    return items.map(({ id, version }) => {
+      const ref = this.getItem(id);
+      if (ref.item.validity.level !== 'L1' || reviewVersion(ref.item) !== version) {
+        throw new RuleError(tr('{id} 已變更，請重新整理並核對後再確認', { id }), 409, 'stale_item');
       }
       return this.confirm(t, id, { note }, principal);
     });
@@ -1277,6 +1304,7 @@ export class KnowledgeStore {
         id: ref.item.id, kind: ref.kind, level: v.level, pending: v.pending,
         subject: this.subjectSummary(ref.subject),
         summary: ref.kind === 'assertion' ? ref.item.content : ref.kind === 'binding' ? tr('綁定客體 {id}（{name}）', { id: ref.item.objectId, name: this.objects.get(ref.item.objectId)?.name || '?' }) : `${this.subjects.get(ref.item.from)?.name} –${ref.item.type}→ ${this.subjects.get(ref.item.to)?.name}`,
+        owner: ref.subject?.owner || null,
         usage, errorCost: cost, priority: (usage + 1) * cost,
         hasValidateAction: !!(v.evidence.actionId || this.findValidateAction(ref))
       });
