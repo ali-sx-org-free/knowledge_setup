@@ -32,6 +32,8 @@ function el() {
     if (e.key === 'ArrowDown' || (e.key === 'n' && e.ctrlKey)) { e.preventDefault(); move(1); }
     else if (e.key === 'ArrowUp' || (e.key === 'p' && e.ctrlKey)) { e.preventDefault(); move(-1); }
     else if (e.key === 'Enter') { e.preventDefault(); run(active); }
+    // 搜索框裡有字時，瀏覽器的 Esc 只清空文字不關閉對話框；面板裡 Esc 一律直接關閉
+    else if (e.key === 'Escape') { e.preventDefault(); d.close(); }
     else if (e.key === 'Tab') {
       const it = items[active];
       if (it?.subject && !expanded) { e.preventDefault(); expanded = it.subject; refresh(); }

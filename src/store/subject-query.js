@@ -586,9 +586,11 @@ export function planSubjectImport(store, rows, principal) {
   const byName = new Map([...store.subjects.values()].map(s => [s.name.toLowerCase(), s]));
   const seen = new Map();
   const domains = store.config.domains;
+  // 行號：調用方可以傳 line（表格中的行號，表頭是第 1 行）；沒有時按 rows 的順序從 1 數起
+  const lineOf = i => (Number.isInteger(rows[i]?.line) && rows[i].line > 0 ? rows[i].line : i + 1);
   return rows.map((raw, index) => {
     const row = {
-      index, name: clean(String(raw?.name ?? '')), type: clean(String(raw?.type ?? '')), domain: clean(String(raw?.domain ?? '')),
+      index, line: lineOf(index), name: clean(String(raw?.name ?? '')), type: clean(String(raw?.type ?? '')), domain: clean(String(raw?.domain ?? '')),
       definition: clean(String(raw?.definition ?? '')) || null, owner: clean(String(raw?.owner ?? '')) || null,
       aliases: listOf(raw?.aliases), tags: listOf(raw?.tags), errorCost: raw?.errorCost ? Number(raw.errorCost) : null
     };
@@ -607,14 +609,14 @@ export function planSubjectImport(store, rows, principal) {
       const targets = dup.type === '別名' ? (d.aliasTargets.get(dup.id) || []).join('、') : null;
       return Object.assign(out, { status: 'skip', existing: store.subjectSummary(dup), reason: targets ? tr('「{name}」已是 {targets} 的別名', { name: row.name, targets }) : tr('已有同名主體 {id}', { id: dup.id }) });
     }
-    if (seen.has(key)) return fail(tr('與第 {n} 行重名', { n: seen.get(key) + 1 }));
+    if (seen.has(key)) return fail(tr('與第 {n} 行重名', { n: lineOf(seen.get(key)) }));
     seen.set(key, index);
     for (const a of row.aliases) {
       const ak = a.toLowerCase();
       if (ak === key) continue;
       const hit = byName.get(ak);
       if (hit) out.aliasPlan.push({ name: a, status: 'skip', reason: hit.type === '別名' ? tr('「{name}」已是別名', { name: a }) : tr('已有同名主體 {id}', { id: hit.id }) });
-      else if (seen.has(ak)) out.aliasPlan.push({ name: a, status: 'skip', reason: tr('與第 {n} 行重名', { n: seen.get(ak) + 1 }) });
+      else if (seen.has(ak)) out.aliasPlan.push({ name: a, status: 'skip', reason: tr('與第 {n} 行重名', { n: lineOf(seen.get(ak)) }) });
       else { seen.set(ak, index); out.aliasPlan.push({ name: a, status: 'create', reason: null }); }
     }
     return out;

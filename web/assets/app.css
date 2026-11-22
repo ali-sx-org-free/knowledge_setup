@@ -332,7 +332,7 @@ kbd{display:inline-block;min-width:18px;padding:0 5px;border:1px solid #d5deea;b
 .ws-caret:before{content:"▸";font-size:9px;transition:transform .15s;display:inline-block}
 .ws-caret.open:before{transform:rotate(90deg)}
 .ws-clear{border:0;background:#eaf4ff;color:var(--blue-strong);font-size:11px;border-radius:4px;padding:1px 6px}
-.ws-items{display:grid;gap:1px}
+.ws-items{display:grid;grid-template-columns:minmax(0,1fr);gap:1px}
 .ws-item{display:flex;align-items:center;gap:6px;width:100%;border:0;background:none;padding:5px 6px;border-radius:6px;font-size:12px;color:#4d5e75;text-align:left;min-height:28px}
 .ws-item:hover{background:#f6f9fd}
 .ws-item.on{background:var(--active);color:var(--blue-strong);font-weight:600}
@@ -451,6 +451,7 @@ kbd{display:inline-block;min-width:18px;padding:0 5px;border:1px solid #d5deea;b
 .ws-mx-tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid var(--line)}
 .ws-mx-tools .button{margin-left:auto}
 .ws-matrix th[scope=row]{background:#fff;color:var(--ink);font-size:12px;font-weight:500;text-align:left;padding:7px 12px}
+.ws-matrix th[scope=row] .ws-caret{font-size:12px;color:var(--ink);font-weight:500}
 .ws-matrix tfoot td,.ws-matrix tfoot th{border-top:2px solid var(--line);font-weight:600;background:#fafcff}
 .ws-mx-child th[scope=row]{padding-left:32px;color:#4d5e75}
 .ws-mx-bar .ws-bar{width:90px;height:8px}
@@ -539,6 +540,9 @@ textarea.inline-input{min-height:72px;font-family:inherit;font-size:12px}
   body.rail-auto.ws-page .side-heading,body.rail-auto.ws-page .caption,body.rail-auto.ws-page .nav-text,body.rail-auto.ws-page .side-foot{display:none}
   body.rail-auto.ws-page .sidenav a{justify-content:center;padding:10px 0}
   body.rail-auto.ws-page .sidenav a.active:after{display:none}
+  .ws{grid-template-columns:204px minmax(0,1fr) 284px}
+  .ws.nav-off{grid-template-columns:minmax(0,1fr) 284px}
+  .ws.preview-off,.ws.matrix-mode{grid-template-columns:204px minmax(0,1fr)}
 }
 /* 1000–1279 px：預覽改為右側抽屜 */
 @media(max-width:1279px){
@@ -546,6 +550,7 @@ textarea.inline-input{min-height:72px;font-family:inherit;font-size:12px}
   .ws.nav-off,.ws.nav-off.preview-off{grid-template-columns:minmax(0,1fr)}
   .ws .ws-preview,.ws.preview-off .ws-preview{display:block;position:fixed;top:var(--header);right:0;bottom:0;width:340px;max-height:none;z-index:28;border-radius:0;box-shadow:-10px 0 40px #24334a24;transform:translateX(105%);transition:transform .2s}
   .ws.preview-open .ws-preview{transform:none}
+  .ws.preview-open:before,.ws.nav-open:before{content:"";position:fixed;inset:var(--header) 0 0 0;background:#1d2a3c2e;z-index:27}
   .ws.matrix-mode .ws-preview{display:none}
 }
 /* 700–999 px：導航欄收進「篩選」按鈕（左側抽屜） */

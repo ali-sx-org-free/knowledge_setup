@@ -1630,12 +1630,13 @@ async function pageTags() {
   const groups = [...new Set(d.tags.map(x => x.group || ''))].sort((a, b) => (a === '') - (b === '') || a.localeCompare(b));
   const row = x => `<tr><td>${docTag(x.name)}</td><td class="wrap-sm">${esc(x.description || '—')}</td><td class="numeric"><a href="#docs?tag=${enc(x.name)}">${x.count}</a></td><td class="numeric"><a href="#subjects?view=all&tag=${enc(x.name)}">${x.subjects || 0}</a></td><td>${x.lastUsedAt ? ago(x.lastUsedAt) : '—'}</td><td>${owner ? `<div class="cell-actions"><button type="button" class="text-btn" data-tag-edit="${esc(x.name)}">${t('編輯')}</button><button type="button" class="text-btn" data-tag-merge="${esc(x.name)}">${t('合併到…')}</button></div>` : ''}</td></tr>`;
   const head = [t('標籤'), t('說明'), '#' + t('文檔'), '#' + t('主體'), t('最近使用'), t('操作')];
-  const rare = d.tags.filter(x => x.count <= 1);
+  const used = x => x.count + (x.subjects || 0);
+  const rare = d.tags.filter(x => used(x) <= 1);
   const merged = Object.entries(d.merged || {});
   content().innerHTML = `<div class="two-col" id="tags-root"><div class="stack">${groups.map(g => panel(esc(g || t('未分組')), table(head, d.tags.filter(x => (x.group || '') === g).map(row)))).join('') || panel(t('標籤'), `<div class="panel-body muted">${t('還沒有標籤：在文檔上加標籤後會自動出現在這裡。')}</div>`)}</div>
-    <div class="stack">${panel(t('只用過一次或未使用（{n}）', { n: rare.length }), `<div class="panel-body"><p class="muted small">${t('用得很少的標籤通常是拼寫不一或重複，可以合併到常用的標籤。')}</p><div class="chip-row" style="margin-top:8px">${rare.map(x => `${docTag(x.name)}<small class="muted">${x.count}</small>`).join(' ') || '—'}</div></div>`)}
+    <div class="stack">${panel(t('只用過一次或未使用（{n}）', { n: rare.length }), `<div class="panel-body"><p class="muted small">${t('用得很少的標籤通常是拼寫不一或重複，可以合併到常用的標籤。')}</p><div class="chip-row" style="margin-top:8px">${rare.map(x => `${docTag(x.name)}<small class="muted">${used(x)}</small>`).join(' ') || '—'}</div></div>`)}
     ${panel(t('合併與重命名記錄'), merged.length ? table([t('舊名'), t('現在')], merged.map(([a, b]) => `<tr><td>${esc(a)}</td><td>${docTag(b)}</td></tr>`)) : `<div class="panel-body muted">${t('還沒有合併或重命名過。舊名在搜索和篩選中繼續可用。')}</div>`)}
-    ${panel(t('說明'), `<div class="panel-body"><ul class="tips"><li>${t('貢獻者可以新增標籤，新標籤自動加入字典（未分組）。')}</li><li>${t('負責人可以設定分組、顏色和說明；重命名和合併會改寫所有用到它的文檔，一次提交。')}</li><li>${t('比對時忽略大小寫和首尾空格。')}</li></ul></div>`)}</div></div>`;
+    ${panel(t('說明'), `<div class="panel-body"><ul class="tips"><li>${t('貢獻者可以新增標籤，新標籤自動加入字典（未分組）。')}</li><li>${t('負責人可以設定分組、顏色和說明；重命名和合併會改寫所有用到它的文檔和主體，一次提交。')}</li><li>${t('比對時忽略大小寫和首尾空格。')}</li></ul></div>`)}</div></div>`;
   const groupList = `<datalist id="tag-groups">${[...new Set(d.tags.map(x => x.group).filter(Boolean))].map(g => `<option value="${esc(g)}">`).join('')}</datalist>`;
   const editDialog = name => {
     const x = d.tags.find(y => y.name === name);

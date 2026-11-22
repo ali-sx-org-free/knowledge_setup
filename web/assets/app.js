@@ -33,7 +33,7 @@ const NAV = {
     { id: 'documents', name: t('文檔庫'), en: 'DOCUMENTS', icon: 'doc', pages: [
       { id: 'docs', name: t('文檔'), aliases: ['doc', 'doc-edit'], desc: t('知識倉庫中的 Markdown 文檔。文件夾就是 Git 目錄；內容走版本，整理即時生效。') },
       { id: 'doc-templates', name: t('nav|模板'), icon: 'grid', desc: t('知識文檔與管理文檔的模板：欄位、章節、誰能發布、多久複審。') },
-      { id: 'doc-tags', name: t('標籤'), icon: 'tag', desc: t('標籤字典：分組、顏色、使用數；重命名與合併會改寫所有用到它的文檔。') }
+      { id: 'doc-tags', name: t('標籤'), icon: 'tag', desc: t('標籤字典：文檔和主體共用；分組、顏色、使用數；重命名與合併會改寫所有用到它的文檔和主體。') }
     ] },
     { id: 'graph', name: t('圖譜'), en: 'GRAPH', icon: 'node', pages: [
       { id: 'graph', name: t('知識圖譜'), desc: t('拖曳節點、滾輪縮放、拖曳空白處平移；點選節點查看主體。') },

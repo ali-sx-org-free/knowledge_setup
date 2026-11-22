@@ -221,7 +221,7 @@ async function renderMatrix(el, st, ws) {
     const rk = child ? child.parent : r.key;
     const ck = child ? r.key : null;
     const b = (r.L0 || 0) + (r.L1 || 0) + (r.L2 || 0);
-    return `<tr class="${child ? 'ws-mx-child' : ''}"><th scope="row">${!child && r.children?.length ? `<button type="button" class="ws-caret${local.get('ws.subjects.mxOpen', []).includes(r.key) ? ' open' : ''}" data-mx-open="${esc(r.key)}" aria-expanded="${local.get('ws.subjects.mxOpen', []).includes(r.key)}">${esc(label(r.key))}</button>` : esc(child ? tv(r.key) : key === null ? '' : label(r.key))}</th>
+    return `<tr class="${child ? 'ws-mx-child' : ''}"><th scope="row">${!child && r.children?.length ? `<button type="button" class="ws-caret${local.get('ws.subjects.mxOpen', []).includes(r.key) ? ' open' : ''}" data-mx-open="${esc(r.key)}" aria-expanded="${local.get('ws.subjects.mxOpen', []).includes(r.key)}">${esc(label(r.key))}</button>` : esc(child ? tv(r.key) : r.key === null ? t('合計') : label(r.key))}</th>
       ${cell(rk, ck, 'total', r.total)}<td class="ws-mx-bar">${miniBar(r)}</td><td class="numeric">${b ? `${Math.round(((r.L0 || 0) / b) * 100)}%` : '—'}</td>
       ${['L0', 'L1', 'L2'].map(l => cell(rk, ck, l, r[l])).join('')}${MATRIX_COLS.map(([k, , tone]) => cell(rk, ck, k, r[k], tone)).join('')}<td class="numeric">${r.usage}</td></tr>`;
   };
@@ -476,8 +476,8 @@ export async function subjectDialog(existing, preset = {}) {
   const s = existing || {};
   const editing = !!existing;
   const type = s.type || preset.type || '指標';
-  const tags = await get('/api/v1/docs/tags').catch(() => []);
-  modal(editing ? t('編輯主體 {id}', { id: s.id }) : t('新增主體'), `${opts}<datalist id="tag-options">${(Array.isArray(tags) ? tags : []).map(x => `<option value="${esc(x.name || x)}">`).join('')}</datalist>
+  const tags = (await get('/api/v1/doc-tags').catch(() => null))?.tags || [];
+  modal(editing ? t('編輯主體 {id}', { id: s.id }) : t('新增主體'), `${opts}<datalist id="tag-options">${tags.map(x => `<option value="${esc(x.name)}">`).join('')}</datalist>
     ${field(t('名稱（規範名）'), input('name', s.name ?? preset.name ?? '', 'required autocomplete="off"'))}
     <div id="similar-box" aria-live="polite"></div>
     <div class="field-pair">${field(t('類型'), select('type', Object.entries(sc.subjectTypes).map(([k, v]) => [k, `${tv(k)} — ${v.desc}`]), type, editing ? 'disabled' : 'id="subject-type"'))}${field(t('領域'), select('domain', sc.domains.map(d => [d.code, C.domainName(d)]), s.domain || preset.domain || sc.domains[0]?.code, editing ? 'disabled' : ''))}</div>
@@ -573,28 +573,33 @@ export function parseTable(text) {
   const src = String(text || '').replace(/^﻿/, '');
   const first = src.split(/\r?\n/, 1)[0] || '';
   const sep = first.includes('\t') ? '\t' : first.split(',').length >= first.split(';').length ? ',' : ';';
+  // 每行記下它在表格中的行號（表頭是第 1 行），查重提示「與第 n 行重名」用同一個行號
   const rows = [];
   let row = [];
   let cell = '';
   let quoted = false;
+  let line = 1;
+  let start = 1;
+  const endRow = () => { row.push(cell); rows.push({ cells: row, line: start }); row = []; cell = ''; start = line; };
   for (let i = 0; i < src.length; i++) {
     const ch = src[i];
+    if (ch === '\n' || (ch === '\r' && src[i + 1] !== '\n')) line++;
     if (quoted) {
       if (ch === '"' && src[i + 1] === '"') { cell += '"'; i++; } else if (ch === '"') quoted = false; else cell += ch;
     } else if (ch === '"' && !cell) quoted = true;
     else if (ch === sep) { row.push(cell); cell = ''; }
-    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && src[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else if (ch === '\n' || ch === '\r') { if (ch === '\r' && src[i + 1] === '\n') { i++; line++; } endRow(); }
     else cell += ch;
   }
-  if (cell || row.length) { row.push(cell); rows.push(row); }
-  const data = rows.filter(r => r.some(c => c.trim()));
+  if (cell || row.length) endRow();
+  const data = rows.filter(r => r.cells.some(c => c.trim()));
   if (!data.length) return { rows: [], unknown: [] };
-  const head = data[0].map(h => h.trim().toLowerCase());
+  const head = data[0].cells.map(h => h.trim().toLowerCase());
   const map = head.map(h => Object.entries(IMPORT_HEADERS).find(([, names]) => names.includes(h))?.[0] || null);
   if (!map.includes('name')) throw new Error(t('第一行必須是表頭，並包含「名稱」欄'));
   return {
-    rows: data.slice(1).map(r => Object.fromEntries(map.map((k, i) => [k, (r[i] || '').trim()]).filter(([k]) => k))),
-    unknown: data[0].filter((h, i) => !map[i] && h.trim())
+    rows: data.slice(1).map(r => ({ ...Object.fromEntries(map.map((k, i) => [k, (r.cells[i] || '').trim()]).filter(([k]) => k)), line: r.line })),
+    unknown: data[0].cells.filter((h, i) => !map[i] && h.trim())
   };
 }
 const IMPORT_STATUS = { create: ['新增', 'green'], skip: ['跳過', 'amber'], error: ['錯誤', 'red'] };
@@ -616,7 +621,7 @@ export function importDialog(after) {
         const n = plan.filter(x => x.status === 'create').length;
         const aliasN = plan.filter(x => x.status === 'create').reduce((m, x) => m + x.aliasPlan.filter(a => a.status === 'create').length, 0);
         $('#import-plan').innerHTML = `${parsed.unknown.length ? `<p class="notice warn">${esc(t('不認識的欄位會被忽略：{list}', { list: parsed.unknown.join(t('、')) }))}</p>` : ''}<p class="batch-sum"><strong>${esc(t('將新增 {n} 個主體、{m} 個別名', { n, m: aliasN }))}</strong> · ${esc(t('跳過 {n} 行', { n: plan.filter(x => x.status === 'skip').length }))} · ${esc(t('錯誤 {n} 行', { n: plan.filter(x => x.status === 'error').length }))}</p>
-          <div class="table-scroll batch-table"><table><thead><tr><th>#</th><th>${t('結果')}</th><th>${t('名稱')}</th><th>${t('類型')}</th><th>${t('領域')}</th><th>${t('別名')}</th><th>${t('說明')}</th></tr></thead><tbody>${plan.map(x => `<tr><td class="numeric">${x.index + 2}</td><td>${pill(t(IMPORT_STATUS[x.status][0]), IMPORT_STATUS[x.status][1])}</td><td>${esc(x.name)}</td><td>${esc(tv(x.type))}</td><td>${esc(x.domain)}</td><td class="wrap">${x.aliasPlan.map(a => `${esc(a.name)}${a.status === 'skip' ? ` <small class="muted" title="${esc(a.reason)}">${t('（跳過）')}</small>` : ''}`).join(t('、')) || '—'}</td><td class="wrap">${esc(x.reason || '')}</td></tr>`).join('')}</tbody></table></div>`;
+          <div class="table-scroll batch-table"><table><thead><tr><th>#</th><th>${t('結果')}</th><th>${t('名稱')}</th><th>${t('類型')}</th><th>${t('領域')}</th><th>${t('別名')}</th><th>${t('說明')}</th></tr></thead><tbody>${plan.map(x => `<tr><td class="numeric">${x.line}</td><td>${pill(t(IMPORT_STATUS[x.status][0]), IMPORT_STATUS[x.status][1])}</td><td>${esc(x.name)}</td><td>${esc(tv(x.type))}</td><td>${esc(x.domain)}</td><td class="wrap-sm">${x.aliasPlan.map(a => `${esc(a.name)}${a.status === 'skip' ? ` <small class="muted" title="${esc(a.reason)}">${t('（跳過）')}</small>` : ''}`).join(t('、')) || '—'}</td><td class="wrap">${esc(x.reason || '')}</td></tr>`).join('')}</tbody></table></div>`;
         $('#dialog-action').textContent = n ? t('導入 {n} 個', { n }) : t('預覽');
         return true;
       }

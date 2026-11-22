@@ -617,6 +617,8 @@ export function mountWorkspace(root, cfg) {
   // ---- 事件
   root.addEventListener('click', async e => {
     const el = e.target;
+    // 窄屏抽屜：點遮罩（抽屜外）收起
+    if (el === wsEl && wsEl.matches('.nav-open, .preview-open')) { wsEl.classList.remove('nav-open', 'preview-open'); return; }
     // 導航欄
     const item = el.closest('.ws-item[data-g]');
     if (item) {
@@ -808,7 +810,9 @@ export function mountWorkspace(root, cfg) {
     { keys: ']', desc: t('收起或展開預覽'), run: () => (window.innerWidth < 1280 ? wsEl.classList.toggle('preview-open') : setLayout('preview', !layout.preview)) },
     ...(cfg.newItem ? [{ keys: 'n', desc: cfg.newItem.label, run: () => cfg.newItem.run(st, api) }] : []),
     ...(cfg.bulk || []).filter(b => b.keys).map(b => ({ keys: b.keys, desc: t('{name}（已選或當前行）', { name: b.label }), run: () => runBulk(b.key), when: () => !b.when || b.when() })),
-    { keys: 'Escape', desc: t('逐層退出：取消選擇 → 關閉預覽 → 清空搜索'), run: () => {
+    { keys: 'Escape', desc: t('逐層退出：收起選單 → 取消選擇 → 關閉預覽 → 清空搜索'), run: () => {
+      const menus = [...document.querySelectorAll('details.menu[open]')];
+      if (menus.length) return menus.forEach(d => { d.open = false; });
       if (wsEl.classList.contains('nav-open')) return wsEl.classList.remove('nav-open');
       if (sel.size) { sel.clear(); selectAllPending = false; return syncSelection(); }
       if (window.innerWidth < 1280 && wsEl.classList.contains('preview-open')) return wsEl.classList.remove('preview-open');
