@@ -14,9 +14,18 @@ td .actions{flex-wrap:nowrap}
 .cell-actions .text-btn{font-size:12px}
 .badge.lvl-L0{font-weight:600}
 .subject-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.subject-overview{align-items:start}
-.assertion-pagination{justify-content:space-between;border-bottom:1px solid var(--line)}
-.assertion-pagination:last-child{border-top:1px solid var(--line);border-bottom:0}
+.panel-filter{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--muted)}
+.panel-filter select{min-height:28px;padding:3px 6px}
+#mini-graph{min-height:300px}
+.subject-assertions td.wrap{min-width:140px}
+.subject-assertions th,.subject-assertions td{padding-left:10px;padding-right:10px}
+.pager{gap:8px;flex-wrap:wrap}
+.pager .actions{gap:4px}
+.pager label{display:flex;gap:6px;align-items:center;margin-right:8px}
+.pager select{min-height:28px;padding:3px 6px}
+.pager .button{min-width:30px;min-height:28px;padding:3px 8px;color:var(--ink)}
+.pager .button.current{background:var(--active);border-color:#9bbfe6;color:var(--blue-strong);font-weight:600}
+.pager-gap{padding:0 2px}
 .kv{display:grid;grid-template-columns:120px 1fr;font-size:12px;margin:0}
 .kv dt,.kv dd{margin:0;padding:7px 0;border-bottom:1px solid var(--line)}
 .kv dt{color:var(--muted)}
@@ -60,6 +69,9 @@ label.field small{font-size:11px}
 .timeline{list-style:none;padding:0;margin:0;font-size:12px}
 .timeline li{padding:7px 0 7px 14px;border-left:2px solid var(--line);position:relative}
 .timeline li:before{content:"";position:absolute;left:-5px;top:12px;width:8px;height:8px;border-radius:50%;background:var(--blue)}
+.timeline-more{margin-top:8px;padding-bottom:0}
+.timeline-more summary{color:var(--blue-strong)}
+.timeline-more[open] summary{margin-bottom:6px}
 .migration{width:100%;height:auto;max-width:720px;display:block;margin:0 auto}
 .migration text{font-size:12px;fill:var(--ink)}
 .migration .note{font-size:10.5px;fill:var(--muted)}
