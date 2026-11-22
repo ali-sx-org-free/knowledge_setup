@@ -14,6 +14,9 @@ td .actions{flex-wrap:nowrap}
 .cell-actions .text-btn{font-size:12px}
 .badge.lvl-L0{font-weight:600}
 .subject-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.subject-overview{align-items:start}
+.assertion-pagination{justify-content:space-between;border-bottom:1px solid var(--line)}
+.assertion-pagination:last-child{border-top:1px solid var(--line);border-bottom:0}
 .kv{display:grid;grid-template-columns:120px 1fr;font-size:12px;margin:0}
 .kv dt,.kv dd{margin:0;padding:7px 0;border-bottom:1px solid var(--line)}
 .kv dt{color:var(--muted)}
