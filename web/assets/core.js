@@ -12,7 +12,10 @@ const ICONS = {
   bolt: '<path d="M13 3L5 14h6l-1 7 8-11h-6z"/>',
   plug: '<path d="M9 3v5M15 3v5M7 8h10v4a5 5 0 0 1-10 0zM12 17v4"/>',
   gear: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1"/>',
-  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>'
+  chart: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
+  folder: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/>',
+  tag: '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.3"/>'
 };
 export const icon = (name = 'grid') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">${ICONS[name] || ICONS.grid}</svg>`;
 
@@ -148,7 +151,7 @@ export const vpill = (v, c = '', ctx) => `<span class="badge ${c}" title="${esc(
 export const tag = s => `<span class="tag">${esc(s)}</span>`;
 export const idLink = (id, label) => {
   if (!id) return '';
-  const href = id.startsWith('S-') ? `#subject/${id}` : id.startsWith('O-') ? `#object/${id}` : id.startsWith('ACT-') ? `#actions` : id.startsWith('P-') ? '#pipelines' : `#item/${id}`;
+  const href = id.startsWith('S-') ? `#subject/${id}` : id.startsWith('O-') ? `#object/${id}` : id.startsWith('DOC-') ? `#doc/${id}` : id.startsWith('TPL-') ? '#doc-templates' : id.startsWith('ACT-') ? `#actions` : id.startsWith('P-') ? '#pipelines' : `#item/${id}`;
   return `<a href="${href}" class="tag">${esc(label || id)}</a>`;
 };
 export function fmtTime(iso) {

@@ -10,6 +10,7 @@ import { tr } from '../i18n/index.js';
 import { RpaClient, RpaError, conformance, draftAction } from '../services/rpa.js';
 import { executionView } from '../services/executions.js';
 import { parseLocator, renderSceneInputs, renderValue } from '../store/rpa.js';
+import { docRoutes } from './docs.js';
 
 const consumer = requireRole('consumer');
 const contributor = requireRole('contributor');
@@ -117,7 +118,7 @@ export function v1Router(ctx) {
   r.get('/objects', consumer, (req, res) => ok(res, S().listObjects({ category: req.query.category, status: req.query.status, q: req.query.q })));
   r.get('/objects/:id', consumer, (req, res) => {
     const o = S().getObject(req.params.id);
-    ok(res, { ...o, boundSubjects: S().bindingsOfObject(o.id).map(({ subject, binding }) => ({ ...S().subjectSummary(subject), bindingId: binding.id, bindingLevel: binding.validity.level })), actions: (o.actionIds || []).map(id => S().actions.get(id)).filter(Boolean) });
+    ok(res, { ...o, boundSubjects: S().bindingsOfObject(o.id).map(({ subject, binding }) => ({ ...S().subjectSummary(subject), bindingId: binding.id, bindingLevel: binding.validity.level })), actions: (o.actionIds || []).map(id => S().actions.get(id)).filter(Boolean), managedBy: S().docs.managedInfo(o), documents: S().docs.documentsForObject(o.id) });
   });
   r.get('/assertions', consumer, (req, res) => ok(res, S().listAssertions({ level: req.query.level, type: req.query.type, subjectId: req.query.subjectId, q: req.query.q, pending: req.query.pending === '1' })));
   r.get('/relations', consumer, (req, res) => ok(res, S().listRelations({ type: req.query.type, level: req.query.level, subjectId: req.query.subjectId })));
@@ -214,6 +215,8 @@ export function v1Router(ctx) {
             case 'evidence.add': r2 = st.addEvidence(t, d.id, d, req.principal); break;
             case 'conflict.create': r2 = st.reportConflict(t, d, req.principal); break;
             case 'feedback.create': r2 = st.submitFeedback(t, d, req.principal); break;
+            case 'doc.create': r2 = st.docs.create(t, d, req.principal); break;
+            case 'doc.link': r2 = st.docs.organize(t, d.id, { subjects: d.subjects, objects: d.objects, related: d.related, tags: d.tags, addSubjects: d.addSubjects, addTags: d.addTags }, req.principal); break;
             default: throw new RuleError(tr('未知 op「{op}」', { op: it.op }), 400, 'unknown_op');
           }
           if (it.ref) refs.set(String(it.ref), r2.id);
@@ -396,6 +399,9 @@ export function v1Router(ctx) {
     const out = await S().tx(req.principal, '[規則] 更新規則參數', t => S().updateConfig(t, req.body || {}, req.principal));
     txOut(res, out);
   });
+
+  // ------------------------------------------------------------ 文檔庫
+  docRoutes(r, ctx, { consumer, contributor, owner, baseUrlOf });
 
   r.use((req, res, next) => next(new HttpError(404, tr('未知端點 {endpoint}', { endpoint: `${req.method} ${req.baseUrl}${req.path}` }), 'not_found')));
   return r;

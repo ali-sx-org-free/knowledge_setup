@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { SUBJECT_TYPES, ASSERTION_TYPES, OBJECT_CATEGORIES, OBJECT_STATUS, RELATION_TYPES, ACTION_KINDS, DEFAULT_DOMAINS, LEVEL_INFO, PIPELINE_TYPES, PENDING_REASONS } from '../src/store/model.js';
+import { SUBJECT_TYPES, ASSERTION_TYPES, OBJECT_CATEGORIES, OBJECT_STATUS, RELATION_TYPES, ACTION_KINDS, DEFAULT_DOMAINS, LEVEL_INFO, PIPELINE_TYPES, PENDING_REASONS, DOC_STATUS, DOC_REVISION, DOC_PURPOSE } from '../src/store/model.js';
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const TARGET_LOCALES = ['zh-CN', 'en'];
@@ -26,7 +26,8 @@ export function enumKeys() {
     ...Object.keys(SUBJECT_TYPES), ...Object.keys(ASSERTION_TYPES), ...Object.keys(OBJECT_CATEGORIES),
     ...Object.values(OBJECT_CATEGORIES).flatMap(c => c.kinds), ...OBJECT_STATUS,
     ...Object.keys(RELATION_TYPES).map(k => `rel|${k}`), ...Object.keys(ACTION_KINDS).map(k => `act|${k}`),
-    ...DEFAULT_DOMAINS.map(d => d.name)
+    ...DEFAULT_DOMAINS.map(d => d.name),
+    ...DOC_STATUS, ...DOC_REVISION, ...Object.keys(DOC_PURPOSE)
   ];
 }
 
@@ -55,7 +56,8 @@ export function modelTexts() {
     ...Object.values(SUBJECT_TYPES).flatMap(v => [v.desc, v.example]), ...Object.values(OBJECT_CATEGORIES).map(v => v.desc),
     ...Object.values(ASSERTION_TYPES), ...Object.values(RELATION_TYPES).flatMap(v => [v.direction, v.example]),
     ...Object.values(ACTION_KINDS), ...Object.values(PIPELINE_TYPES), ...Object.values(PENDING_REASONS),
-    ...Object.values(LEVEL_INFO).flatMap(v => [v.name, v.condition, v.usage])
+    ...Object.values(LEVEL_INFO).flatMap(v => [v.name, v.condition, v.usage]),
+    ...Object.values(DOC_PURPOSE)
   ];
 }
 

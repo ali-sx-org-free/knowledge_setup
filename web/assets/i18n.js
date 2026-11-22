@@ -84,7 +84,14 @@ export const DATA_PATTERNS = [
   ['客體存在（HTTP {status}）', /^客體存在（HTTP (?<status>\d+)）$/],
   // RPA 校驗寫回的層級歷史備註與最近校驗說明（守衛摘要裡的出參名與值不翻譯）
   ['RPA 運行 {run}（{id}）', /^RPA 運行 (?<run>\S+)（(?<id>[^（）]+)）$/],
-  ['守衛全部通過：{summary}', /^守衛全部通過：(?<summary>.*)$/s]
+  ['守衛全部通過：{summary}', /^守衛全部通過：(?<summary>.*)$/s],
+  // 文檔庫：發布重大修訂時寫入知識的降級說明、發布時自動建的綁定、廢止時客體的下線原因
+  ['{id} v{version} 重大修訂：{note}', /^(?<id>DOC-\d+) v(?<version>\d+) 重大修訂：(?<note>.*)$/s],
+  ['{id} v{version} 小修：{note}', /^(?<id>DOC-\d+) v(?<version>\d+) 小修：(?<note>.*)$/s],
+  ['{id} v{version} 重大修訂', /^(?<id>DOC-\d+) v(?<version>\d+) 重大修訂$/],
+  ['{id} v{version} 小修', /^(?<id>DOC-\d+) v(?<version>\d+) 小修$/],
+  ['文檔 {id} 發布時綁定', /^文檔 (?<id>DOC-\d+) 發布時綁定$/],
+  ['文檔 {id} 已廢止：{reason}', /^文檔 (?<id>DOC-\d+) 已廢止：(?<reason>.*)$/s]
 ];
 
 // 服務端寫入知識倉庫、會原樣顯示在後台的固定短語（td() 精確匹配）。
