@@ -1,6 +1,16 @@
 // 管理後台英文字典：鍵是代碼中的繁體原文（見 web/assets/i18n.js），值是英文譯文。
 // 新增或修改介面文字後執行 node scripts/i18n-check.js 檢查缺少的條目。
 export default {
+  "每頁條數": "Rows per page",
+  "有效斷言": "Active assertions",
+  "全部斷言": "All assertions (including invalid)",
+  "斷言分頁": "Assertion pagination",
+  "首頁": "First",
+  "上一頁": "Previous",
+  "下一頁": "Next",
+  "末頁": "Last",
+  "顯示 {start}–{end} 條，共 {total} 條": "Showing {start}–{end} of {total}",
+  "第 {page} / {pages} 頁": "Page {page} / {pages}",
   "已補齊示例資料（新增 {n} 篇文檔，保留現有知識）": "Added {n} sample documents; existing knowledge preserved",
   "示例資料已齊全，保留現有內容": "Sample data is complete; existing content preserved",
   "全選當前結果中的 L1 斷言": "Select all L1 assertions in these results",
