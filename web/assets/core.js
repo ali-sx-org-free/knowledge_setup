@@ -4,6 +4,19 @@ export const $ = (s, root = document) => root.querySelector(s);
 export const $$ = (s, root = document) => [...root.querySelectorAll(s)];
 export const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
+/** 結構化值保留標量原文；枚舉映射顯示編碼與含義，陣列和巢狀值保留 JSON 結構。返回純文字，渲染時仍須 esc()。 */
+export function structuredValueText(value) {
+  if (value === undefined) return '';
+  if (value === null || typeof value !== 'object') return String(value);
+  if (Array.isArray(value)) return JSON.stringify(value);
+  const entries = Object.entries(value);
+  if (!entries.length) return '{}';
+  if (entries.every(([key]) => /^-?(0|[1-9]\d*)$/.test(key))) {
+    entries.sort(([a], [b]) => BigInt(a) < BigInt(b) ? -1 : BigInt(a) > BigInt(b) ? 1 : 0);
+  }
+  return entries.map(([key, item]) => `${key}: ${item !== null && typeof item === 'object' ? JSON.stringify(item) : String(item)}`).join('; ');
+}
+
 const ICONS = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><path d="M14 17.5h7m-3.5-3.5v7"/>',
   node: '<circle cx="6" cy="6" r="2.5"/><circle cx="18" cy="8" r="2.5"/><circle cx="10" cy="18" r="2.5"/><path d="M8.3 7l7.4.8M7.2 8.2l2 7.4M16.6 10l-5 6"/>',

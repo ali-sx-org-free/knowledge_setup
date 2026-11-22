@@ -28,16 +28,20 @@ export function adminRouter(ctx) {
   r.get('/me', requireLogin, (req, res) => res.json({ data: req.principal }));
 
   r.get('/overview', requireLogin, async (req, res) => {
+    const store = S();
     res.json({
       data: {
-        health: S().health({ windowDays: Number(req.query.days) || 7 }),
-        git: { ...S().repo.status, auth: S().repo.authMode(), head: await S().repo.head(), subdir: S().subdir, loadErrors: S().loadErrors },
+        health: store.health({ windowDays: Number(req.query.days) || 7 }),
+        git: { ...store.repo.status, auth: store.repo.authMode(), head: await store.repo.head(), subdir: store.subdir, loadErrors: store.loadErrors },
         llm: { enabled: ctx.llm.enabled, model: ctx.llm.model },
-        log: await S().repo.log({ limit: 8 })
+        log: await store.repo.log({ limit: 8, paths: [`${store.subdir}/`] })
       }
     });
   });
-  r.get('/log', requireLogin, async (req, res) => res.json({ data: await S().repo.log({ limit: Math.min(200, Number(req.query.limit) || 50) }) }));
+  r.get('/log', requireLogin, async (req, res) => {
+    const store = S();
+    res.json({ data: await store.repo.log({ limit: Math.min(200, Number(req.query.limit) || 50), paths: [`${store.subdir}/`] }) });
+  });
 
   // ---- 設定
   r.get('/settings', requireAdmin, async (req, res) => {

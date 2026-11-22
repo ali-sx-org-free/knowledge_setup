@@ -2,6 +2,7 @@
 // 走真實流程：先以人身份提交（寫入上限 L1/L2），再由 Action 校驗（→ L0 自動）與負責人確認（→ L0 人工）晉升。
 import { RuleError } from '../store/validity.js';
 import { docMessages } from '../store/docs.js';
+import { tr } from '../i18n/index.js';
 
 const SUBJECTS = [
   ['inv-center', '庫存中心', '系統', 'INV', '管理全渠道庫存數量與預佔的權威系統；不負責倉內作業'],
@@ -32,7 +33,13 @@ const SUBJECTS = [
 
 export async function seedInventory(ctx, principal) {
   const store = ctx.store;
-  if ([...store.subjects.values()].some(s => s.name === '可售庫存')) throw new RuleError('示例資料已存在（主體「可售庫存」已登記）', 409, 'already_seeded');
+  if ([...store.subjects.values()].some(s => s.name === '可售庫存')) {
+    // 舊版示例沒有文檔庫。沿用實際 ID，只補文檔，不重建或重新確認已有知識。
+    const { ids, made } = existingInventory(store);
+    const before = store.docs.docs.size;
+    const docs = await seedDocuments(store, principal, ids, made);
+    return { subjects: 0, focus: ids.atp, ids, docs, docsAdded: store.docs.docs.size - before };
+  }
   const ids = {};
 
   // 1. 動力層：管道與 Action（示意管道，不連真實系統）
@@ -131,7 +138,38 @@ export async function seedInventory(ctx, principal) {
   // 5. 文檔庫：初始文件夾與標籤；DOC-0001 接管 O-0001（從 v3 起算，v4 小修）；SOP 草稿 DOC-0002；《知識庫寫作指南》DOC-0003
   const docs = await seedDocuments(store, principal, ids, made);
 
-  return { subjects: Object.keys(ids).length, focus: ids.atp, ids, docs };
+  return { subjects: Object.keys(ids).length, focus: ids.atp, ids, docs, docsAdded: Object.keys(docs).length };
+}
+
+function existingInventory(store) {
+  const missing = [];
+  const uniqueId = (items, matches, label) => {
+    const found = [...items].filter(matches);
+    if (found.length !== 1) missing.push(label);
+    return found.length === 1 ? found[0].id : undefined;
+  };
+  const required = ['atp', 'inv-center', 'physical', 'reserved', 'frozen', 'safety', 'transfer', 'outbound', 'outbound-cmd', 'putaway'];
+  const ids = Object.fromEntries(SUBJECTS.filter(([key]) => required.includes(key)).map(([key, name, type, domain]) =>
+    [key, uniqueId(store.subjects.values(), s => s.name === name && s.type === type && s.domain === domain, name)]));
+  const o = Object.fromEntries(Object.entries({ doc: 'wiki://inventory/metrics/v3', field: 'inventory.sku_stock.available_qty', api: '/inventory/v1/availability' }).map(([key, locator]) =>
+    [key, uniqueId(store.objects.values(), item => item.locator === locator, locator)]));
+  const assertions = store.subjects.get(ids.atp)?.assertions || [];
+  const a = Object.fromEntries(Object.entries({ neg: '計算結果為負時，對外按 0 展示', old: '可售庫存 = 實物庫存 − 已預佔 − 凍結，不扣安全庫存' }).map(([key, content]) =>
+    [key, uniqueId(assertions, item => item.content === content, content)]));
+  if (missing.length) throw new RuleError(tr('無法補齊文檔示例，舊示例的依據缺失或不唯一：{items}。請改用新的測試目錄載入完整示例。', { items: missing.join('、') }), 409, 'seed_dependencies_missing');
+  return { ids, made: { o, a } };
+}
+
+async function createSeedDocument(store, principal, input) {
+  const lib = store.docs;
+  // 接管客體是穩定標識；其餘文檔按模板與標題識別，移動文件夾不會重複建立。
+  const existing = [...lib.docs.values()].find(d => {
+    const meta = lib.head(d).meta;
+    return input.takeOverObjectId ? meta.objectId === input.takeOverObjectId : meta.template === input.template && meta.title === input.title;
+  });
+  if (existing) return { id: existing.id, created: false };
+  const { result } = await store.tx(principal, docMessages.create, t => lib.create(t, input, principal));
+  return { ...result, created: true };
 }
 
 const FOLDERS = [
@@ -149,7 +187,7 @@ async function seedDocuments(store, principal, ids, made) {
   const lib = store.docs;
   await store.tx(principal, '[示例] 文檔庫：初始文件夾與標籤', t => {
     for (const f of FOLDERS) if (!lib.findFolder(f.path)) lib.createFolder(t, f, principal);
-    for (const [name, info] of Object.entries(TAGS)) lib.updateTag(t, name, info, principal);
+    for (const [name, info] of Object.entries(TAGS)) if (!Object.hasOwn(lib.tags, lib.canonicalTag(name))) lib.updateTag(t, name, info, principal);
   });
 
   // DOC-0001：接管原來登記在 wiki 上的《庫存口徑定義 v3》（O-0001），版本從 v3 起算
@@ -194,19 +232,21 @@ v3 起扣減安全庫存，舊口徑 [[${made.a.old}]] 作廢。
   const v4 = v3.replace('SKU-123 在上海一號倉：實物 120、已預佔 30、凍結 5、安全庫存 10，可售庫存為 75。數字僅為示意。', `SKU-123 在上海一號倉：實物 120、已預佔 30、凍結 5、安全庫存 10，可售庫存為 75。數字僅為示意。
 
 跨倉調撥：上海一號倉調往北京一號倉的 20 件，出庫後到上架前為在途，兩個倉都不計入；在北京一號倉上架後才計入北京一號倉的可售庫存。`).replace('v3 起扣減安全庫存，舊口徑', 'v4 補充跨倉調撥示例。v3 起扣減安全庫存，舊口徑');
-  const { result: d1 } = await store.tx(principal, docMessages.create, t => lib.create(t, {
+  const d1 = await createSeedDocument(store, principal, {
     template: 'TPL-0004', title: '庫存口徑定義', folder: '庫存/口徑', owner: '庫存域架構師',
     summary: '可售庫存、實物庫存、安全庫存等庫存指標的統一計算口徑；自 v3 起可售庫存扣減安全庫存。',
     tags: ['口徑', '對外'], subjects: [S.atp, S.physical, S.safety, S.reserved, S.frozen],
     fields: { metric: S.atp, ownerSystem: S['inv-center'], effectiveFrom: '2026-06-01', scope: '全渠道' },
     takeOverObjectId: made.o.doc, startVersion: 3, body: v3
-  }, principal));
-  await store.tx(principal, docMessages.publish, t => lib.publish(t, d1.id, { note: `從 wiki 接管《庫存口徑定義 v3》（${made.o.doc}）` }, principal));
-  await store.tx(principal, docMessages.save, t => lib.saveDraft(t, d1.id, { etag: lib.get(d1.id).pub.etag, body: v4 }, principal));
-  await store.tx(principal, docMessages.publish, t => lib.publish(t, d1.id, { major: false, note: '補充跨倉調撥示例' }, principal));
+  });
+  if (d1.created) {
+    await store.tx(principal, docMessages.publish, t => lib.publish(t, d1.id, { note: `從 wiki 接管《庫存口徑定義 v3》（${made.o.doc}）` }, principal));
+    await store.tx(principal, docMessages.save, t => lib.saveDraft(t, d1.id, { etag: lib.get(d1.id).pub.etag, body: v4 }, principal));
+    await store.tx(principal, docMessages.publish, t => lib.publish(t, d1.id, { major: false, note: '補充跨倉調撥示例' }, principal));
+  }
 
   // DOC-0002：SOP 草稿，還差異常處理（體檢會提示）
-  const { result: d2 } = await store.tx(principal, docMessages.create, t => lib.create(t, {
+  const d2 = await createSeedDocument(store, principal, {
     template: 'TPL-0003', title: '跨倉調撥作業 SOP', folder: '庫存/SOP', owner: '倉儲域架構師',
     summary: '庫存在倉庫之間調撥時，從建單、出庫、在途到入庫上架的作業步驟與異常處理。',
     tags: ['SOP'], subjects: [S.transfer],
@@ -237,10 +277,10 @@ v3 起扣減安全庫存，舊口徑 [[${made.a.old}]] 作廢。
 <!-- 提示：常見異常、處理方式和升級對象 -->
 
 `
-  }, principal));
+  });
 
   // DOC-0003：《知識庫寫作指南》，知識條目，貢獻者可直接發布
-  const { result: d3 } = await store.tx(principal, docMessages.create, t => lib.create(t, {
+  const d3 = await createSeedDocument(store, principal, {
     template: 'TPL-0001', title: '知識庫寫作指南', folder: '通用', owner: '知識庫管理員',
     summary: '什麼時候寫斷言、什麼時候寫文檔，以及怎樣寫出智能體和人都能準確引用的文檔。',
     tags: ['指南'],
@@ -270,7 +310,7 @@ v3 起扣減安全庫存，舊口徑 [[${made.a.old}]] 作廢。
 
 - [[${d1.id}]]
 `
-  }, principal));
-  await store.tx(principal, docMessages.publish, t => lib.publish(t, d3.id, { note: '第一版' }, principal));
+  });
+  if (d3.created) await store.tx(principal, docMessages.publish, t => lib.publish(t, d3.id, { note: '第一版' }, principal));
   return { [d1.id]: '庫存口徑定義', [d2.id]: '跨倉調撥作業 SOP', [d3.id]: '知識庫寫作指南' };
 }

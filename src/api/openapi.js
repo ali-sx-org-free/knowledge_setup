@@ -15,6 +15,7 @@ const ENDPOINTS = [
   E('get', '/graph', tk('圖譜子圖'), 'consumer', { tag: tk('消費'), query: ['focus', 'depth', 'domain', 'types', 'relationTypes', 'levels', 'aliases', 'e1'] }),
   E('get', '/objects', tk('客體列表'), 'consumer', { tag: tk('消費'), query: ['category', 'status', 'q'] }),
   E('get', '/assertions', tk('斷言列表'), 'consumer', { tag: tk('消費'), query: ['level', 'type', 'subjectId', 'q', 'pending'] }),
+  E('post', '/assertions/confirm-batch', tk('批量審批所選 L1 斷言'), 'owner', { tag: tk('負責人'), body: { items: '[{id,version:reviewVersion}]', note: 'string' } }),
   E('get', '/relations', tk('關係列表'), 'consumer', { tag: tk('消費'), query: ['type', 'level', 'subjectId'] }),
   E('get', '/items/{id}', tk('帶有效性的條目（B-/A-/R-）'), 'consumer', { tag: tk('消費') }),
   E('post', '/actions/{id}/invoke', tk('調用取值 Action 獲取實時動態值'), 'consumer', { tag: tk('消費'), body: { inputs: 'object' } }),

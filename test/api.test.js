@@ -14,6 +14,33 @@ before(async () => {
 });
 after(() => t.close());
 
+test('批量審批遵守負責人權限，過期選項整批回滾，重送不重複續期', async () => {
+  const agent = await t.keyFor('agent', 'contributor');
+  const subject = (await agent('POST', '/api/v1/subjects', { name: '批量審批測試', type: '規則', domain: 'INV' })).body.data;
+  for (const content of ['批量確認甲', '批量確認乙']) {
+    const r = await agent('POST', `/api/v1/subjects/${subject.id}/assertions`, { content, type: '規則', evidence: { sourceRef: 'test-spec' } });
+    assert.equal(r.status, 201);
+  }
+  const rows = async () => (await agent('GET', `/api/v1/assertions?subjectId=${subject.id}`)).body.data;
+  const selection = list => list.map(a => ({ id: a.id, version: a.reviewVersion }));
+  const items = selection(await rows());
+  const url = '/api/v1/assertions/confirm-batch';
+  assert.equal((await agent('POST', url, { items })).status, 403);
+  await agent('PATCH', `/api/v1/assertions/${items[1].id}`, { content: '已更正的規則' });
+  assert.equal((await t.admin('POST', url, { items })).status, 409);
+  assert.deepEqual((await rows()).map(a => a.validity.level), ['L1', 'L1']);
+  const payload = { items: selection(await rows()), note: '已核對' };
+  const ok = await t.admin('POST', url, payload);
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.ok(ok.body.commit);
+  assert.equal((await t.admin('POST', url, payload)).status, 409);
+  for (const a of await rows()) {
+    assert.equal(a.validity.level, 'L0');
+    assert.equal(a.validity.method, 'manual');
+    assert.equal(a.validity.history.at(-1).note, payload.note);
+  }
+});
+
 test('教程 prompt API 公開可取，包含寫入規則與端點', async () => {
   const r = await t.call('GET', '/api/v1/prompt');
   assert.equal(r.status, 200);
