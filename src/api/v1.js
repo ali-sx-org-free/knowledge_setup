@@ -11,6 +11,11 @@ import { RpaClient, RpaError, conformance, draftAction } from '../services/rpa.j
 import { executionView } from '../services/executions.js';
 import { parseLocator, renderSceneInputs, renderValue } from '../store/rpa.js';
 import { docRoutes } from './docs.js';
+import {
+  planSubjectBatch, applySubjectBatch, planSubjectUndo, subjectsCsv, confirmableItems, confirmItemsMessage,
+  planSubjectImport, applySubjectImport, planRelationBatch
+} from '../store/subject-query.js';
+import { sourceOf } from '../store/validity.js';
 
 const consumer = requireRole('consumer');
 const contributor = requireRole('contributor');
@@ -99,7 +104,66 @@ export function v1Router(ctx) {
     const out = S().resolveTerms(text);
     ok(res, { ...out, canonical: out.canonical.map(id => S().subjectSummary(S().subjects.get(id))) });
   });
-  r.get('/subjects', consumer, (req, res) => ok(res, S().listSubjects({ q: req.query.q, type: req.query.type, domain: req.query.domain, level: req.query.level, limit: Number(req.query.limit) || 500 })));
+  // 主體工作台：多值篩選（逗號分隔，! 開頭為排除）、狀態、視圖、排序、分頁；回應帶 page.total（不再靜默截斷）
+  const meOf = req => (req.principal ? { id: req.principal.id, name: ctx.prefs.ownerName(req.principal) } : null);
+  r.get('/subjects', consumer, (req, res) => {
+    const out = S().querySubjects(req.query, { me: meOf(req) });
+    ok(res, out.rows, { page: { total: out.total, offset: out.offset, limit: out.limit } });
+  });
+  r.get('/subjects/facets', consumer, (req, res) => ok(res, S().subjectFacets(req.query, { me: meOf(req) })));
+  r.get('/subjects/export', consumer, (req, res) => {
+    if ((req.query.format || 'csv') !== 'csv') throw new HttpError(400, tr('{field} 必須為 {values}', { field: 'format', values: 'csv' }), 'invalid_input');
+    const { format, limit, offset, ...query } = req.query;
+    const rows = S().querySubjects(query, { me: meOf(req), all: true }).rows;
+    res.setHeader('content-type', 'text/csv; charset=utf-8');
+    res.setHeader('content-disposition', `attachment; filename="subjects-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(subjectsCsv(rows, list(req.query.columns)));
+  });
+  r.get('/subjects/similar', consumer, (req, res) => {
+    const name = String(req.query.name || '').trim();
+    if (!name) throw new HttpError(400, tr('{field} 必填', { field: 'name' }), 'invalid_input');
+    ok(res, S().similarSubjects(name, { limit: Math.min(20, Number(req.query.limit) || 8) }));
+  });
+  // 批量整理：負責人、指定負責人、出錯代價、有效期、標籤。dryRun 只返回計畫；提交後記下撤銷記錄
+  r.post('/subjects/batch', contributor, async (req, res) => {
+    const body = req.body || {};
+    const opts = { me: meOf(req) };
+    const preview = planSubjectBatch(S(), body, req.principal, opts);
+    if (body.dryRun) return ok(res, { updated: preview.updated, skipped: preview.skipped, message: preview.message });
+    const out = await S().tx(req.principal, x => x.message, t => {
+      const plan = planSubjectBatch(S(), body, req.principal, opts);
+      return { ...applySubjectBatch(S(), t, plan), message: plan.message };
+    });
+    if (out.commit && out.result.updated.length) {
+      ctx.batches.save({ commit: out.commit, message: out.result.message, at: new Date().toISOString(), by: sourceOf(req.principal), items: out.result.updated });
+    }
+    res.json({ data: out.result, commit: out.commit, undoable: !!out.commit, warnings: out.warnings });
+  });
+  r.post('/subjects/batch/undo', contributor, async (req, res) => {
+    const commit = String(req.body?.commit || '').trim();
+    const record = ctx.batches.get(commit);
+    if (!record) throw new HttpError(404, tr('找不到提交 {commit} 的批量記錄：只有批量整理（負責人、標籤、出錯代價、有效期）可以撤銷', { commit: commit || '—' }), 'not_found');
+    if (record.undoneBy) throw new HttpError(409, tr('提交 {commit} 已撤銷（{undo}）', { commit: record.commit, undo: record.undoneBy.commit }), 'already_undone');
+    planSubjectUndo(S(), record, req.principal);
+    const out = await S().tx(req.principal, x => x.message, t => {
+      const plan = planSubjectUndo(S(), record, req.principal);
+      return { ...applySubjectBatch(S(), t, plan), message: plan.message };
+    });
+    if (out.commit) ctx.batches.save({ ...record, undoneBy: { commit: out.commit, at: new Date().toISOString(), by: sourceOf(req.principal) } });
+    txOut(res, out);
+  });
+  // 批量導入：貼上表格或 CSV 解析後的行；dryRun 返回每行的查重與校驗結果，提交時一次提交
+  r.post('/subjects/import', contributor, async (req, res) => {
+    const rows = req.body?.rows;
+    const plan = planSubjectImport(S(), rows, req.principal);
+    if (req.body?.dryRun) return ok(res, { rows: plan });
+    if (!plan.some(x => x.status === 'create')) throw new HttpError(400, tr('沒有可以新增的行'), 'nothing_to_import');
+    const out = await S().tx(req.principal, x => `[批量] 導入主體 ${x.created.length} 個（別名 ${x.created.reduce((n, c) => n + c.aliases.length, 0)} 個）`, t => {
+      const fresh = planSubjectImport(S(), rows, req.principal);
+      return { rows: fresh, created: applySubjectImport(S(), t, fresh, req.principal) };
+    });
+    txOut(res, out, 201);
+  });
   r.get('/subjects/:id', consumer, (req, res) => ok(res, S().card(req.params.id, { includeHistory: req.query.history === '1' })));
   r.get('/subjects/:id/context', consumer, (req, res) => {
     const card = S().card(req.params.id);
@@ -185,6 +249,19 @@ export function v1Router(ctx) {
     const out = await S().tx(req.principal, x => `[生產] 新增關係 ${x.id}：${x.from} –${x.type}→ ${x.to}（${x.validity.level}）`, t => S().createRelation(t, req.body || {}, req.principal));
     txOut(res, out, 201);
   });
+  // 批量新增關係：所選主體逐個與目標主體建立同一種關係；不合規的跳過並說明，其餘一次提交
+  r.post('/relations/batch', contributor, async (req, res) => {
+    const body = req.body || {};
+    const plan = planRelationBatch(S(), body, req.principal);
+    if (body.dryRun) return ok(res, plan);
+    if (!plan.ok.length) throw new HttpError(400, tr('所選主體都不能建立這條關係'), 'nothing_to_create', { problems: plan.skipped });
+    const out = await S().tx(req.principal, x => x.message, t => {
+      const p = planRelationBatch(S(), body, req.principal);
+      const created = p.ok.map(x => S().createRelation(t, { from: x.from, to: x.to, type: p.type, level: body.level, evidence: body.evidence }, req.principal));
+      return { created: created.map(x => ({ id: x.id, from: x.from, to: x.to, level: x.validity.level })), skipped: p.skipped, message: p.message };
+    });
+    txOut(res, out, 201);
+  });
   r.delete('/relations/:id', requireAdmin, async (req, res) => {
     const out = await S().tx(req.principal, `[管理] 刪除關係 ${req.params.id}`, t => S().deleteRelation(t, req.params.id, req.principal));
     txOut(res, out);
@@ -253,6 +330,22 @@ export function v1Router(ctx) {
     ok(res, executionView(ctx.executions.refresh(req.params.id)), {}, 202);
   });
   r.post('/validate-all', owner, async (req, res) => ok(res, await ctx.actions.validateAll(req.principal, { onlyPending: req.body?.onlyPending === true })));
+  r.post('/validate-batch', contributor, async (req, res) => {
+    const ids = req.body?.subjectIds;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 500) throw new HttpError(400, tr('subjectIds 必須為 1–{n} 個主體 ID', { n: 500 }), 'invalid_input');
+    ok(res, await ctx.actions.validateSubjects(ids, req.principal));
+  });
+  // 批量確認為 L0：先列出所選主體下全部有證據的 L1 條目（附審閱版本），逐條勾選後一次確認
+  r.post('/items/confirmable', contributor, (req, res) => ok(res, confirmableItems(S(), req.body?.subjectIds, req.principal)));
+  r.post('/items/confirm-batch', owner, async (req, res) => {
+    const { items, note } = req.body || {};
+    if (!Array.isArray(items) || !items.length || items.length > 1000 || items.some(x => !x || typeof x.id !== 'string' || typeof x.version !== 'string') ||
+        new Set(items.map(x => x.id)).size !== items.length || (note != null && typeof note !== 'string')) {
+      throw new HttpError(400, tr('請提供不重複的條目 ID 與審閱版本'), 'invalid_input');
+    }
+    const out = await S().tx(req.principal, confirmItemsMessage(S(), items), t => S().confirmItems(t, items, note, req.principal));
+    txOut(res, out);
+  });
   r.post('/items/:id/confirm', owner, async (req, res) => {
     const out = await S().tx(req.principal, `[確認] ${req.params.id} → L0（負責人 ${req.principal.name}）`, t => S().confirm(t, req.params.id, req.body || {}, req.principal));
     txOut(res, out);

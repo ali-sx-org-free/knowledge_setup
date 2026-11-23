@@ -10,6 +10,7 @@
 | 教程 prompt API | `GET /api/v1/prompt`（公開）：三方智能體拉取後即可學會如何生產知識；`?role=consumer` 為消費教程 |
 | 消費型 API | `POST /api/v1/ask` 返回結構化知識卡 + 自然語言答案（經 **OpenRouter** 組織，未配置時用規則模板）；另有知識卡、圖譜、術語解析、取值 Action 等 |
 | 文檔庫 | 後台 **文檔庫** 與 `/api/v1/docs`：人和智能體按模板寫 Markdown 文檔，存放在知識倉庫的 `docs/`；草稿、審閱、發布與版本歷史；發布後登記為制度客體，可綁定主體、作斷言證據，修訂時讓依賴它的知識降級重驗；文件夾、標籤、智能視圖、台賬、體檢與段級搜索。第二期加入導入 Word/PDF、AI 起草、從知識生成手冊、從文檔提取斷言、問答引用文檔、四眼審閱、全局搜索和 Markdown 壓縮包導出。見下方「[文檔庫](#文檔庫)」 |
+| 主體管理 | 後台 **知識庫 › 主體** 是一個工作台：導航欄平鋪領域、層級、狀態、類型、負責人、標籤，點一下篩選，數量聯動；批量整理（負責人、標籤、出錯代價、有效期）提交前看計畫、可撤銷；矩陣、我的視圖、批量導入與查重、命令面板 `⌘K` / `Ctrl+K` 和全後台快捷鍵（按 `?` 查看）。斷言、客體、關係、重驗隊列用同一套工作台。設計見 [docs/design/subject-management.md](docs/design/subject-management.md)，驗收見 [驗收教程](docs/acceptance-guide.md) 的 N 節 |
 
 ## 一鍵安裝（不需要 clone）
 
@@ -210,6 +211,7 @@ RPA 支持 `expectedRevision` 時（[RPA PR #32](https://github.com/ali-sx-org-f
 | 健康指標：L0 覆蓋率、待重驗數、未收錄查詢數、L0 錯誤反饋數 | `KnowledgeStore.health`、後台「健康指標」 |
 | 文檔庫：模板、草稿與發布、修訂、文件夾、標籤、體檢、版本與差異、段級搜索 | `src/store/docs.js`、`src/store/doc-templates.js`、`src/services/doc-*.js`、`src/api/docs.js`、`web/assets/docs.js` |
 | 文檔庫第二期：導入、AI 起草與提取斷言、手冊、壓縮包導出、問答引用文檔、全局搜索 | `src/services/doc-convert.js`、`src/services/zip.js`、`src/services/doc-ai.js`、`src/services/doc-generate.js`、`src/services/doc-export.js`、`src/services/ask.js`、`src/api/docs.js` |
+| 主體管理：多值篩選與聯動計數、批量整理與撤銷、導入查重、批量關係、我的視圖；列表工作台、命令面板、快捷鍵 | `src/store/subject-query.js`、`src/services/batch-log.js`、`src/services/prefs.js`、`src/api/v1.js`、`web/assets/workspace.js`、`web/assets/subjects.js`、`web/assets/lists.js`、`web/assets/palette.js`、`web/assets/keys.js` |
 
 ## API 概覽
 

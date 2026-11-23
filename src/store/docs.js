@@ -577,12 +577,41 @@ export class DocLibrary {
         }
       }
     }
+    // 主體標籤共用這份字典：另計每個標籤用在幾個主體上
+    const subjects = new Map();
+    for (const s of this.store.subjects.values()) {
+      for (const tg of s.tags || []) {
+        const key = this.canonicalTag(tg);
+        subjects.set(key, (subjects.get(key) || 0) + 1);
+        if (!stats.has(key)) stats.set(key, { docs: new Set(), lastUsedAt: null });
+        const st = stats.get(key);
+        if (s.updatedAt && (!st.lastUsedAt || s.updatedAt > st.lastUsedAt)) st.lastUsedAt = s.updatedAt;
+      }
+    }
     const names = uniq([...Object.keys(this.tags), ...stats.keys()]);
     return {
-      tags: names.map(name => ({ name, ...(this.tags[name] || {}), count: stats.get(name)?.docs.size || 0, lastUsedAt: stats.get(name)?.lastUsedAt || null })).sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.name.localeCompare(b.name)),
+      tags: names.map(name => ({ name, ...(this.tags[name] || {}), count: stats.get(name)?.docs.size || 0, subjects: subjects.get(name) || 0, lastUsedAt: stats.get(name)?.lastUsedAt || null })).sort((a, b) => (a.group || '').localeCompare(b.group || '') || a.name.localeCompare(b.name)),
       merged: this.merged,
       colors: TAG_COLORS
     };
+  }
+
+  /** 改寫所有主體中的標籤（重命名、合併）：返回改動的主體數。 */
+  rewriteSubjectTags(t, mapping) {
+    const lower = new Map(Object.entries(mapping).map(([k, v]) => [k.toLowerCase(), v]));
+    let n = 0;
+    for (const s of this.store.subjects.values()) {
+      if (!(s.tags || []).some(x => lower.has(x.toLowerCase()))) continue;
+      const next = [];
+      for (const x of s.tags) {
+        const y = lower.get(x.toLowerCase()) || x;
+        if (!next.some(z => z.toLowerCase() === y.toLowerCase())) next.push(y);
+      }
+      s.tags = next;
+      t.touch('subject', s.id);
+      n++;
+    }
+    return n;
   }
 
   /** 改寫所有文檔中的標籤（重命名、合併）：返回改動的篇數。 */
@@ -628,7 +657,7 @@ export class DocLibrary {
       this.merged[key] = newName;
       for (const [k, v] of Object.entries(this.merged)) if (v === key) this.merged[k] = newName;
       const n = this.rewriteTags(t, { [key]: newName });
-      renamed = { from: key, to: newName, docs: n };
+      renamed = { from: key, to: newName, docs: n, subjects: this.rewriteSubjectTags(t, { [key]: newName }) };
     }
     this.tags[renamed ? newName : key] = info;
     this.writeTags(t);
@@ -643,6 +672,7 @@ export class DocLibrary {
     if (!from.length) throw fail(400, 'invalid_input', tr('{field} 必填', { field: 'from' }));
     const mapping = Object.fromEntries(from.map(f => [f, to]));
     const n = this.rewriteTags(t, mapping);
+    const subjects = this.rewriteSubjectTags(t, mapping);
     for (const f of from) {
       delete this.tags[f];
       this.merged[f] = to;
@@ -650,7 +680,7 @@ export class DocLibrary {
     for (const [k, v] of Object.entries(this.merged)) if (from.includes(v)) this.merged[k] = to;
     this.tags[to] ||= {};
     this.writeTags(t);
-    return { from, to, docs: n };
+    return { from, to, docs: n, subjects };
   }
 
   // ------------------------------------------------------------ 寫入輔助
@@ -1775,7 +1805,7 @@ export const docMessages = {
   folderCreate: r => `[文檔] 新建文件夾 ${r.path}`,
   folderUpdate: r => (r.moved ? `[文檔] 重命名文件夾 ${r.moved.from} → ${r.moved.to}（${r.moved.docs} 篇）` : `[文檔] 文件夾設定 ${r.path}`),
   folderDelete: r => `[文檔] 刪除文件夾 ${r.path}`,
-  tagUpdate: r => (r.renamed ? `[文檔] 重命名標籤 ${r.renamed.from} → ${r.renamed.to}（${r.renamed.docs} 篇）` : `[文檔] 標籤設定 ${r.name}`),
-  tagMerge: r => `[文檔] 合併標籤 ${r.from.join('、')} → ${r.to}（${r.docs} 篇）`,
+  tagUpdate: r => (r.renamed ? `[文檔] 重命名標籤 ${r.renamed.from} → ${r.renamed.to}（${r.renamed.docs} 篇${r.renamed.subjects ? `、${r.renamed.subjects} 個主體` : ''}）` : `[文檔] 標籤設定 ${r.name}`),
+  tagMerge: r => `[文檔] 合併標籤 ${r.from.join('、')} → ${r.to}（${r.docs} 篇${r.subjects ? `、${r.subjects} 個主體` : ''}）`,
   template: r => `[文檔] 模板 ${r.id} ${r.name}`
 };
