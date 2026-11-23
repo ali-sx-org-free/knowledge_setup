@@ -5,6 +5,7 @@ import {
   setUnauthorizedHandler, level, pill, vpill, tag, idLink, fmtTime, ago, pct, panel, table, formData, field, input, select, textarea, markdown, LEVEL_TEXT
 } from './core.js';
 import { renderGraph, legend } from './graph.js';
+import { groupHistory } from './history.js';
 import { registerDocPages, subjectDocsPanel, objectDocsHtml, docsDashboardPanel, docNoteHtml, aiDraftDialog, openNewDoc } from './docs.js';
 import { t, tk, tv, td, locale, initI18n, setLocale, localeSelect } from './i18n.js';
 import { installKeys, bindGlobalKeys, bindGoKeys, setPageKeys, setSingleKeys, showKeyHelp, kbd } from './keys.js';
@@ -494,11 +495,20 @@ function inlineEdit(s, field, dd) {
   box.addEventListener('blur', () => finish(false));
 }
 
-/** 版本歷史：先列最近幾條，更早的收進「顯示更早的提交」，避免側欄被拉得很長。 */
-function historyHtml(history, shown = 8) {
-  const item = l => `<li><strong>${esc(l.subject)}</strong><span class="cell-sub">${esc(td(l.author))} · ${fmtTime(l.date)} · <span class="mono">${esc(l.hash)}</span></span></li>`;
-  const more = history.slice(shown);
-  return `<div class="panel-body"><ul class="timeline">${history.slice(0, shown).map(item).join('') || `<li>${t('尚無提交')}</li>`}</ul>${more.length ? `<details class="timeline-more"><summary>${t('顯示更早的 {n} 條提交', { n: more.length })}</summary><ul class="timeline">${more.map(item).join('')}</ul></details>` : ''}</div>`;
+function historyHtml(history) {
+  if (!history.length) return `<div class="panel-body muted">${t('尚無提交')}</div>`;
+  const groups = groupHistory(history);
+  const meta = (l, hash = true) => `<span class="cell-sub">${esc(td(l.author))} · ${fmtTime(l.date)}${hash ? ` · <span class="mono">${esc(l.hash)}</span>` : ''}</span>`;
+  const entryHtml = group => {
+    const first = group.entries[0];
+    if (group.entries.length > 1) {
+      const title = group.operation === 'invalidate' ? t('批量失效 · {n} 次提交', { n: group.entries.length }) : t('批量確認 · {n} 次提交', { n: group.entries.length });
+      return `<li><details class="history-entry"><summary><strong class="history-title">${esc(title)}</strong>${meta(first, false)}</summary><ul class="history-raw">${group.entries.map(l => `<li><p>${esc(l.subject)}</p>${meta(l)}</li>`).join('')}</ul></details></li>`;
+    }
+    const title = `<strong class="history-title">${esc(first.subject)}</strong>${meta(first)}`;
+    return `<li><details class="history-entry"><summary>${title}</summary><p class="history-message">${esc(first.subject)}</p></details></li>`;
+  };
+  return `<div class="panel-body subject-history"><p class="history-caption muted">${esc(t('最近 {n} 次提交，連續重複操作已合併', { n: history.length }))}</p><ul class="timeline">${groups.slice(0, 3).map(entryHtml).join('')}</ul>${groups.length > 3 ? `<details class="history-older"><summary>${esc(t('更早記錄（{n} 組）', { n: groups.length - 3 }))}</summary><ul class="timeline">${groups.slice(3).map(entryHtml).join('')}</ul></details>` : ''}</div>`;
 }
 
 async function assertionDialog(s, card) {
@@ -698,15 +708,31 @@ function jsonDialog(title, value, save) {
 PAGES.actions = async () => {
   const [list, pipelines] = await Promise.all([get('/api/v1/actions'), get('/api/v1/pipelines')]);
   setActions(isOwner() ? `<button class="button primary" id="add-action">${t('新增 Action')}</button>` : '');
+  const pipelineName = a => pipelines.find(p => p.id === a.pipelineId)?.name || a.pipelineId || '—';
+  const reviewState = a => a.enabled === false ? pill(t('未啟用'), 'amber') : a.rpa ? (a.review?.readOnly ? pill(t('已審閱只讀'), 'green') : pill(t('未審閱'), 'amber')) : '';
   const req = a => (a.rpa ? `RPA ${esc(a.rpa.sceneId)} v${esc(a.rpa.revision)}<span class="cell-sub">${a.enabled === false ? pill(t('未啟用'), 'amber') : a.review?.readOnly ? esc(t('已審閱只讀 · {by}', { by: a.review.by || '' })) : pill(t('未審閱'), 'amber')}</span>` : `${esc(a.request.method)} ${esc(a.request.path)}`);
   const io = a => (a.rpa ? `${Object.keys(a.rpa.inputs || {}).map(tag).join(' ')}<span class="cell-sub">${esc(t('守衛 {outputs}', { outputs: (a.check?.expect || []).map(e => e.output).join(t('、')) }))}</span>` : `${(a.inputs || []).map(i => tag(i.name)).join(' ') || '—'}${a.output?.path ? `<span class="cell-sub">${esc(t('輸出 {path}', { path: a.output.path }))}</span>` : ''}`);
   const ops = a => [
+    `<button class="text-btn action-details" data-id="${esc(a.id)}" aria-label="${esc(t('查看 {id} 詳情', { id: a.id }))}">${t('詳情')}</button>`,
     a.kind === '取值' && !a.rpa ? `<button class="text-btn" data-op="invoke" data-id="${esc(a.id)}">${t('調用')}</button>` : '',
     a.rpa && isOwner() ? `<button class="text-btn" data-op="previewAction" data-id="${esc(a.id)}">${t('預覽')}</button><button class="text-btn" data-op="reviewAction" data-id="${esc(a.id)}">${t('審閱')}</button>` : '',
     a.rpa ? `<a class="text-btn" href="#executions/${esc(a.id)}">${t('記錄')}</a>` : '',
     isOwner() && !a.builtin ? `<button class="text-btn edit-action" data-id="${esc(a.id)}">${t('編輯')}</button>` : ''
   ].join('');
-  content().innerHTML = panel(t('Action（{n}）', { n: list.length }), table(['ID', t('名稱'), t('種類'), t('管道'), t('請求 / 場景'), t('輸入 / 輸出'), t('調用權限'), t('操作')], list.map(a => `<tr><td>${tag(a.id)}</td><td class="wrap">${esc(a.name)}<span class="cell-sub">${esc(a.description || '')}</span></td><td>${vpill(a.kind, a.kind === '校驗' ? 'blue' : 'green', 'act')}${a.check ? `<span class="cell-sub">${esc(a.check.mode)}</span>` : ''}</td><td>${esc(pipelines.find(p => p.id === a.pipelineId)?.name || a.pipelineId)}</td><td class="mono wrap">${req(a)}</td><td class="wrap">${io(a)}</td><td>${esc(a.permission)}</td><td><div class="cell-actions">${ops(a)}</div></td></tr>`), t('尚無 Action')));
+  content().innerHTML = panel(t('Action（{n}）', { n: list.length }), table(['ID', t('名稱'), t('種類 / 狀態'), t('管道'), t('操作')], list.map(a => `<tr><td>${tag(a.id)}</td><td class="action-overview"><span class="action-name">${esc(a.name)}</span>${a.description ? `<span class="cell-sub action-summary">${esc(a.description.replace(/\s+/g, ' ').trim())}</span>` : ''}</td><td>${vpill(a.kind, a.kind === '校驗' ? 'blue' : 'green', 'act')}<span class="cell-sub">${reviewState(a)}</span></td><td class="action-pipeline">${esc(pipelineName(a))}</td><td><div class="cell-actions">${ops(a)}</div></td></tr>`), t('尚無 Action')), '', 'action-list');
+  $$('.action-details').forEach(b => (b.onclick = () => {
+    const a = list.find(x => x.id === b.dataset.id);
+    const rows = [
+      [t('名稱'), esc(a.name)],
+      [t('說明'), `<div class="action-description">${esc(a.description || '—')}</div>`],
+      [t('種類 / 狀態'), `${vpill(a.kind, a.kind === '校驗' ? 'blue' : 'green', 'act')} ${reviewState(a)}${a.check ? ` <span class="muted">${esc(a.check.mode)}</span>` : ''}`],
+      [t('管道'), esc(pipelineName(a))],
+      [t('請求 / 場景'), `<span class="mono">${req(a)}</span>`],
+      [t('輸入 / 輸出'), io(a)],
+      [t('調用權限'), esc(mapText(ROLE_TEXT, a.permission) || '—')]
+    ];
+    modal(t('{id} 詳情', { id: a.id }), `<dl class="kv">${rows.map(([label, value]) => `<dt>${label}</dt><dd>${value}</dd>`).join('')}</dl>`);
+  }));
   $('#add-action')?.addEventListener('click', () => jsonDialog(t('新增 Action'), { ...actionTemplate(), pipelineId: pipelines[0]?.id || 'P-0001' }, body => post('/api/v1/actions', body)));
   $$('.edit-action').forEach(b => (b.onclick = () => { const a = list.find(x => x.id === b.dataset.id); const { id, updatedAt, inputs, ...rest } = a; jsonDialog(t('編輯 {id}', { id }), a.rpa ? rest : { ...rest, inputs }, body => put(`/api/v1/actions/${id}`, body)); }));
 };

@@ -1,10 +1,17 @@
 // 管理後台英文字典：鍵是代碼中的繁體原文（見 web/assets/i18n.js），值是英文譯文。
 // 新增或修改介面文字後執行 node scripts/i18n-check.js 檢查缺少的條目。
 export default {
+  "批量失效 · {n} 次提交": "Batch invalidation · {n} commits",
+  "批量確認 · {n} 次提交": "Batch confirmation · {n} commits",
+  "最近 {n} 次提交，連續重複操作已合併": "Latest {n} commits; consecutive repeated operations grouped",
+  "更早記錄（{n} 組）": "Earlier history ({n} groups)",
+  "已審閱只讀": "Reviewed · read-only",
+  "種類 / 狀態": "Kind / status",
+  "查看 {id} 詳情": "View {id} details",
+  "{id} 詳情": "{id} details",
   "每頁條數": "Rows per page",
   "有效斷言": "Active assertions",
   "全部斷言": "All assertions (including invalid)",
-  "顯示更早的 {n} 條提交": "Show {n} earlier commits",
   "分頁": "Pagination",
   "上一頁": "Previous",
   "下一頁": "Next",
