@@ -97,6 +97,52 @@ const WORKSPACE_PAGES = new Set(['subjects', 'assertions', 'objects', 'relations
 const setActions = html => ($('#page-actions').innerHTML = html);
 const qs = obj => new URLSearchParams(Object.entries(obj).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
 
+// 主體詳情的斷言沿用 main 的分頁條；列表由工作台分批載入。
+/** 頁碼不超出範圍，返回當頁的項目。 */
+function pageSlice(list, state) {
+  state.page = Math.min(Math.max(1, state.page), Math.max(1, Math.ceil(list.length / state.size)));
+  const start = (state.page - 1) * state.size;
+  return list.slice(start, start + state.size);
+}
+/** 1 … 4 5 6 … 20：首末頁和當前頁前後各一頁。 */
+function pageNumbers(page, pages) {
+  if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+  const keep = [...new Set([1, 2, page - 1, page, page + 1, pages - 1, pages])].filter(n => n >= 1 && n <= pages).sort((a, b) => a - b);
+  return keep.flatMap((n, i) => (i && n - keep[i - 1] > 1 ? ['…', n] : [n]));
+}
+/** 在 el 中渲染分頁條（結果不超過最小的每頁條數時不顯示）；翻頁或改每頁條數後調用 onChange。 */
+function renderPager(el, total, state, onChange) {
+  const pages = Math.max(1, Math.ceil(total / state.size));
+  const start = (state.page - 1) * state.size;
+  const button = (n, label, attrs = '') => `<button type="button" class="button${n === state.page && !attrs ? ' current' : ''}" data-page="${n}" ${attrs}${n === state.page && !attrs ? ' aria-current="page"' : ''}>${label}</button>`;
+  el.innerHTML = total <= state.sizes[0] ? '' : `<nav class="pagination pager" aria-label="${esc(t('分頁'))}">
+    <span>${esc(t('顯示 {start}–{end} 條，共 {total} 條', { start: start + 1, end: Math.min(start + state.size, total), total }))}</span>
+    <div class="actions">
+      <label>${t('每頁條數')} ${select('page-size', state.sizes, state.size, 'data-page-size')}</label>
+      ${button(state.page - 1, '‹', `aria-label="${esc(t('上一頁'))}" ${state.page === 1 ? 'disabled' : ''}`)}
+      ${pageNumbers(state.page, pages).map(n => (n === '…' ? '<span class="pager-gap">…</span>' : button(n, n))).join('')}
+      ${button(state.page + 1, '›', `aria-label="${esc(t('下一頁'))}" ${state.page === pages ? 'disabled' : ''}`)}
+    </div>
+  </nav>`;
+  const changed = () => {
+    onChange();
+    const top = el.closest('.panel')?.getBoundingClientRect().top;
+    if (top < 56) window.scrollBy({ top: top - 68 }); // 換頁後回到表頭（頂欄固定 56px）
+  };
+  el.onclick = e => {
+    const b = e.target.closest('button[data-page]');
+    if (!b || b.disabled) return;
+    state.page = Number(b.dataset.page);
+    changed();
+  };
+  el.onchange = e => {
+    if (!e.target.matches('[data-page-size]')) return;
+    state.size = Number(e.target.value);
+    state.page = 1;
+    changed();
+  };
+}
+
 async function subjectOptions(force = false) {
   if (!subjectsCache || force) subjectsCache = await get('/api/v1/subjects?limit=1000');
   return `<datalist id="subject-options">${subjectsCache.map(s => `<option value="${esc(s.id)} ${esc(s.name)}">`).join('')}</datalist>`;
@@ -353,75 +399,37 @@ PAGES.subject = async ({ param }) => {
       <dt>${t('標籤')}</dt><dd data-field="tags">${editable('tags', (s.tags || []).map(x => `<span class="tag-chip">${esc(x)}</span>`).join(' ') || '—', t('標籤'))}</dd>
       <dt>${t('別名')}</dt><dd>${card.aliases.map(a => `${idLink(a.id, a.name)}${a.ambiguous ? ` <span class="badge amber">${t('多義')}</span>` : ''}`).join(' ') || '—'}${canWrite ? ` <button type="button" class="text-btn" id="add-alias-inline">+ ${t('別名')}</button>` : ''}</dd>
       <dt>${t('更新')}</dt><dd>${fmtTime(s.updatedAt)}</dd></dl>`;
-    content().innerHTML = `${ctxBar.html}${pendingStrip}${tabs}<div class="stack">
-      <div id="subject-assertions" class="sec-anchor">${panel(t('斷言（{n}）', { n: card.assertions.length }), `
-        <div class="toolbar assertion-pagination">
-          <span id="assertion-range" class="muted" role="status" aria-live="polite"></span>
-          <div class="actions">
-            <label>${t('層級')}${select('assertion-level', [['active', t('有效斷言')], ['all', t('全部斷言')], 'L0', 'L1', 'L2', 'E1'], 'active', 'id="assertion-level" aria-controls="subject-assertion-table"')}</label>
-            <label>${t('每頁條數')}${select('assertion-page-size', [10, 20, 50], 10, 'id="assertion-page-size" aria-controls="subject-assertion-table"')}</label>
-          </div>
-        </div>
-        <div id="subject-assertion-table"></div>
-        <p class="e1-fold" id="e1-fold" hidden></p>
-        <nav class="toolbar assertion-pagination" aria-label="${esc(t('斷言分頁'))}">
-          <span id="assertion-page-info" class="muted"></span>
-          <div class="actions">
-            <button class="button" id="assertion-first" aria-controls="subject-assertion-table">${t('首頁')}</button>
-            <button class="button" id="assertion-prev" aria-controls="subject-assertion-table">${t('上一頁')}</button>
-            <button class="button" id="assertion-next" aria-controls="subject-assertion-table">${t('下一頁')}</button>
-            <button class="button" id="assertion-last" aria-controls="subject-assertion-table">${t('末頁')}</button>
-          </div>
-        </nav>`)}</div>
-      <div class="two-col subject-overview"><div class="stack">
+    // 保留 main 的左欄佈局，同時保留工作台的區塊定位與行內編輯。
+    content().innerHTML = `${ctxBar.html}${pendingStrip}${tabs}<div class="two-col subject-overview"><div class="stack">
         <div id="sec-bindings" class="sec-anchor">${panel(t('客體綁定（{n}）', { n: card.bindings.length }), table(['ID', t('客體'), t('狀態'), t('層級'), t('驗證'), t('操作')], bindingRows, t('尚無客體綁定：綜合層級為 L2')), `<span class="muted" style="font-size:11px">${t('綜合層級 = 有效綁定中的最高層級')}</span>`)}</div>
         <div id="sec-relations" class="sec-anchor">${panel(t('關係（{n}）', { n: relCount }), table(['ID', t('起點'), t('關係'), t('終點'), t('層級'), t('操作')], [...card.relations.outgoing.map(r => relRow(r, 'out')), ...card.relations.incoming.map(r => relRow(r, 'in'))], t('尚無關係')))}</div>
         <div id="sec-docs" class="sec-anchor">${subjectDocsPanel(s, docs)}</div>
+        <div id="subject-assertions" class="sec-anchor">${panel(t('斷言（{n}）', { n: card.assertions.length }), `<div id="subject-assertion-table"></div><p class="e1-fold" id="e1-fold" hidden></p><div id="subject-assertion-pager"></div>`, `<label class="panel-filter">${t('層級')}${select('assertion-level', [['active', t('有效斷言')], ['all', t('全部斷言')], 'L0', 'L1', 'L2', 'E1'], 'active', 'id="assertion-level" aria-controls="subject-assertion-table"')}</label>`, 'subject-assertions')}</div>
       </div><div class="stack">
         ${panel(t('主體資訊'), `<div class="panel-body">${info}</div>`)}
         ${panel(t('可用 Action'), `<div class="panel-body stack-sm">${actionLibrary(card.actions) || `<p class="muted">${t('綁定的客體沒有配置 Action。')}</p>`}${card.dynamicValueNote ? `<p class="notice">${esc(card.dynamicValueNote)}</p>` : ''}</div>`)}
         <div id="sec-graph" class="sec-anchor">${panel(t('一跳鄰域'), `<div id="mini-graph" class="graph-canvas"></div>`)}</div>
         <div id="sec-history" class="sec-anchor">${panel(t('版本歷史'), historyHtml(history))}</div>
-      </div></div>
-    </div>`;
-    let assertionPage = 1;
-    let assertionPageSize = 10;
+      </div></div>`;
+    const paging = { page: 1, size: 10, sizes: [10, 20, 50] };
     let assertionLevel = 'active';
     const filteredAssertions = () => card.assertions.filter(a => assertionLevel === 'all' || (assertionLevel === 'active' ? a.level !== 'E1' : a.level === assertionLevel));
-    const assertionPageCount = () => Math.max(1, Math.ceil(filteredAssertions().length / assertionPageSize));
     const renderAssertions = () => {
       const assertions = filteredAssertions();
-      const total = assertions.length;
-      const pages = assertionPageCount();
-      assertionPage = Math.max(1, Math.min(assertionPage, pages));
-      const start = (assertionPage - 1) * assertionPageSize;
-      const rows = assertions.slice(start, start + assertionPageSize).map(assertionRow);
-      $('#subject-assertions h2').textContent = t('斷言（{n}）', { n: total });
-      $('#subject-assertion-table').innerHTML = table(['ID', t('類型'), t('內容'), t('層級'), t('證據'), t('操作')], rows, t('尚無斷言。約束類斷言（否定性知識、邊界情況）最容易被智能體用常識補錯，建議優先收集。'));
-      $('#assertion-range').textContent = t('顯示 {start}–{end} 條，共 {total} 條', { start: total ? start + 1 : 0, end: Math.min(start + assertionPageSize, total), total });
-      $('#assertion-page-info').textContent = t('第 {page} / {pages} 頁', { page: assertionPage, pages });
-      $('#assertion-first').disabled = $('#assertion-prev').disabled = assertionPage === 1;
-      $('#assertion-next').disabled = $('#assertion-last').disabled = assertionPage === pages;
+      $('#subject-assertions h2').textContent = t('斷言（{n}）', { n: assertions.length });
+      $('#subject-assertion-table').innerHTML = table(['ID', t('類型'), t('內容'), t('層級'), t('證據'), t('操作')], pageSlice(assertions, paging).map(assertionRow), card.assertions.length ? t('沒有相符項目') : t('尚無斷言。約束類斷言（否定性知識、邊界情況）最容易被智能體用常識補錯，建議優先收集。'));
+      renderPager($('#subject-assertion-pager'), assertions.length, paging, renderAssertions);
       // E1 收起：預設只顯示有效斷言，失效的收成一行
       const fold = $('#e1-fold');
       fold.hidden = !(assertionLevel === 'active' && e1Count);
       fold.innerHTML = fold.hidden ? '' : `${esc(t('另有 {n} 條失效（E1）斷言', { n: e1Count }))} · <button type="button" class="text-btn" id="show-e1">${t('顯示')}</button>`;
     };
-    $('#assertion-page-size').onchange = e => {
-      assertionPageSize = Number(e.target.value);
-      assertionPage = 1;
-      renderAssertions();
-    };
     $('#assertion-level').onchange = e => {
       assertionLevel = e.target.value;
-      assertionPage = 1;
+      paging.page = 1;
       renderAssertions();
     };
-    $('#assertion-first').onclick = () => { assertionPage = 1; renderAssertions(); };
-    $('#assertion-prev').onclick = () => { assertionPage--; renderAssertions(); };
-    $('#assertion-next').onclick = () => { assertionPage++; renderAssertions(); };
-    $('#assertion-last').onclick = () => { assertionPage = assertionPageCount(); renderAssertions(); };
-    $('#e1-fold').onclick = e => { if (e.target.closest('#show-e1')) { assertionLevel = 'all'; $('#assertion-level').value = 'all'; assertionPage = 1; renderAssertions(); } };
+    $('#e1-fold').onclick = e => { if (e.target.closest('#show-e1')) { assertionLevel = 'all'; $('#assertion-level').value = 'all'; paging.page = 1; renderAssertions(); } };
     renderAssertions();
     renderGraph($('#mini-graph'), graph, { focus: s.id, height: 300, onSelect: n => { if (n.id !== s.id) location.hash = `subject/${n.id}`; } });
     const closeMenus = () => $$('#page-actions details[open]').forEach(d => d.removeAttribute('open'));
@@ -486,8 +494,11 @@ function inlineEdit(s, field, dd) {
   box.addEventListener('blur', () => finish(false));
 }
 
-function historyHtml(history) {
-  return `<div class="panel-body"><ul class="timeline">${history.map(l => `<li><strong>${esc(l.subject)}</strong><span class="cell-sub">${esc(td(l.author))} · ${fmtTime(l.date)} · <span class="mono">${esc(l.hash)}</span></span></li>`).join('') || `<li>${t('尚無提交')}</li>`}</ul></div>`;
+/** 版本歷史：先列最近幾條，更早的收進「顯示更早的提交」，避免側欄被拉得很長。 */
+function historyHtml(history, shown = 8) {
+  const item = l => `<li><strong>${esc(l.subject)}</strong><span class="cell-sub">${esc(td(l.author))} · ${fmtTime(l.date)} · <span class="mono">${esc(l.hash)}</span></span></li>`;
+  const more = history.slice(shown);
+  return `<div class="panel-body"><ul class="timeline">${history.slice(0, shown).map(item).join('') || `<li>${t('尚無提交')}</li>`}</ul>${more.length ? `<details class="timeline-more"><summary>${t('顯示更早的 {n} 條提交', { n: more.length })}</summary><ul class="timeline">${more.map(item).join('')}</ul></details>` : ''}</div>`;
 }
 
 async function assertionDialog(s, card) {
