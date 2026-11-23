@@ -40,8 +40,23 @@ export function adminRouter(ctx) {
   });
   r.get('/log', requireLogin, async (req, res) => {
     const store = S();
-    res.json({ data: await store.repo.log({ limit: Math.min(200, Number(req.query.limit) || 50), paths: [`${store.subdir}/`] }) });
+    const log = await store.repo.log({ limit: Math.min(200, Number(req.query.limit) || 50), paths: [`${store.subdir}/`] });
+    // 批量整理的提交標出能否撤銷（有撤銷記錄且尚未撤銷）
+    const index = ctx.batches.index();
+    res.json({ data: log.map(l => {
+      const b = /^\[批量\]/.test(l.subject || '') ? ctx.batches.find(index, l.hash) : null;
+      return b ? { ...l, batch: { undoable: !b.undoneBy, undoneBy: b.undoneBy?.commit || null } } : l;
+    }) });
   });
+
+  // ---- 每個登入身份的偏好與「我的視圖」（存在服務本地，按身份分開）
+  r.get('/prefs', requireLogin, (req, res) => {
+    const p = ctx.prefs.read(req.principal);
+    res.json({ data: { prefs: p.prefs, views: p.views, ownerName: ctx.prefs.ownerName(req.principal) } });
+  });
+  r.put('/prefs', requireLogin, (req, res) => res.json({ data: ctx.prefs.updatePrefs(req.principal, req.body || {}) }));
+  r.get('/views', requireLogin, (req, res) => res.json({ data: ctx.prefs.read(req.principal).views }));
+  r.put('/views', requireLogin, (req, res) => res.json({ data: ctx.prefs.setViews(req.principal, req.body?.scope, req.body?.views) }));
 
   // ---- 設定
   r.get('/settings', requireAdmin, async (req, res) => {

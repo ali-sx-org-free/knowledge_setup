@@ -29,7 +29,15 @@ const ICONS = {
   doc: '<path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6"/>',
   folder: '<path d="M3 6.5A1.5 1.5 0 0 1 4.5 5H9l2 2h8.5A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"/>',
   tag: '<path d="M3 12V4h8l10 10-8 8z"/><circle cx="7.5" cy="8.5" r="1.3"/>',
-  search: '<circle cx="11" cy="11" r="6.5"/><path d="M20.5 20.5l-4.9-4.9"/>'
+  search: '<circle cx="11" cy="11" r="6.5"/><path d="M20.5 20.5l-4.9-4.9"/>',
+  filter: '<path d="M4 5h16l-6 7.5V19l-4 1.5v-8z"/>',
+  rail: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M9 4v16"/>',
+  star: '<path d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9l-5.2 2.7 1-5.8L3.5 9.7l5.9-.9z"/>',
+  clock: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>',
+  user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20c.8-3.6 3.6-5.5 7-5.5s6.2 1.9 7 5.5"/>',
+  fire: '<path d="M12 3c1 3.5 5 5.5 5 10a5 5 0 0 1-10 0c0-2 1-3.5 2-4.5.3 1.5 1 2.5 2 3 0-3 .5-6 1-8.5z"/>',
+  eye: '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
+  matrix: '<rect x="3" y="3" width="18" height="18" rx="1.5"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>'
 };
 export const icon = (name = 'grid') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">${ICONS[name] || ICONS.grid}</svg>`;
 
@@ -42,7 +50,7 @@ export function shell(config, route) {
   const group = entry.group;
   $('#topnav').innerHTML = groups.map(g => `<a href="#${g.pages[0].id}" class="${g.id === group.id ? 'active' : ''}" ${g.id === group.id ? 'aria-current="true"' : ''}>${esc(g.name)}</a>`).join('');
   $('#side-heading').innerHTML = `<small>${esc(group.en)}</small><strong>${esc(group.name)}</strong>`;
-  $('#sidenav').innerHTML = group.pages.map(p => `<a href="#${p.id}" class="${p.id === entry.id ? 'active' : ''}" ${p.id === entry.id ? 'aria-current="page"' : ''}><span class="nav-icon">${icon(p.icon || group.icon)}</span><span>${esc(p.name)}</span></a>`).join('');
+  $('#sidenav').innerHTML = group.pages.map(p => `<a href="#${p.id}" class="${p.id === entry.id ? 'active' : ''}" ${p.id === entry.id ? 'aria-current="page"' : ''} title="${esc(p.name)}"><span class="nav-icon">${icon(p.icon || group.icon)}</span><span class="nav-text">${esc(p.name)}</span></a>`).join('');
   setHeading(entry.name, entry.desc || '', group.name + ' › ' + entry.name);
   document.title = entry.name + ' · ' + config.title;
   $('#sidebar').classList.remove('open');
@@ -58,11 +66,24 @@ export function setHeading(title, desc, crumb) {
 }
 
 let toastTimer;
-export function toast(text, ms = 3200) {
-  $('#toast').textContent = text;
-  $('#toast').hidden = false;
+/** 提示條；action = { label, run } 時帶一個按鈕（例如批量後的「撤銷」，保留 ms 毫秒）。 */
+export function toast(text, ms = 3200, action = null) {
+  const box = $('#toast');
+  box.textContent = text;
+  if (action) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'toast-action';
+    b.textContent = action.label;
+    b.onclick = async () => {
+      box.hidden = true;
+      try { await action.run(); } catch (err) { showError(err); }
+    };
+    box.append(' ', b);
+  }
+  box.hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => ($('#toast').hidden = true), ms);
+  toastTimer = setTimeout(() => (box.hidden = true), ms);
 }
 
 export function modal(title, html, action) {

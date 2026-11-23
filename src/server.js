@@ -14,6 +14,8 @@ import { ExecutionService } from './services/executions.js';
 import { DocAi } from './services/doc-ai.js';
 import { AskService } from './services/ask.js';
 import { LlmClient } from './services/llm.js';
+import { BatchLog } from './services/batch-log.js';
+import { Prefs } from './services/prefs.js';
 import { Auth, HttpError } from './api/auth.js';
 import { v1Router } from './api/v1.js';
 import { adminRouter } from './api/admin.js';
@@ -32,6 +34,8 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
   ctx.auth = new Auth(ctx);
   // SSH 部署金鑰（ssh 倉庫地址時使用）：DATA_DIR/ssh/，或由 KNOWLEDGE_GIT_SSH_KEY_FILE 指定私鑰檔
   ctx.ssh = new SshKeys({ dir: path.join(dataDir, 'ssh'), keyFile: env.KNOWLEDGE_GIT_SSH_KEY_FILE });
+  // 每個登入身份的後台偏好與「我的視圖」（本地，不進知識倉庫）
+  ctx.prefs = new Prefs(path.join(dataDir, 'prefs'));
 
   /** 依 Git 設定（重新）建立知識庫；切換倉庫時調用。 */
   ctx.reconfigure = async () => {
@@ -47,6 +51,8 @@ export async function createServer({ dataDir = process.env.DATA_DIR || path.join
     if (ctx.executions) await ctx.executions.stop();
     ctx.executions = await new ExecutionService({ store, dir: path.join(dataDir, 'executions', slug), env, fetchImpl, logger, ...executions }).init();
     ctx.actions = new ActionRunner({ store, env, fetchImpl, executions: ctx.executions });
+    // 批量整理的撤銷記錄按倉庫分目錄
+    ctx.batches = new BatchLog(path.join(dataDir, 'batches', slug));
     ctx.ask = new AskService({ store, actions: ctx.actions, llm: ctx.llm, logger });
     ctx.docAi = new DocAi({ store, llm: ctx.llm, logger });
     return store;
