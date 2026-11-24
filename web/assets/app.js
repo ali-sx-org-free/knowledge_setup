@@ -6,6 +6,8 @@ import {
 } from './core.js';
 import { renderGraph, legend } from './graph.js';
 import { groupHistory } from './history.js';
+import { compareDdlCommentsFirst } from './assertion-order.js';
+import { evidenceSourceHtml, evidenceSourceInfo } from './evidence.js';
 import { registerDocPages, subjectDocsPanel, objectDocsHtml, docsDashboardPanel, docNoteHtml, aiDraftDialog, openNewDoc } from './docs.js';
 import { t, tk, tv, td, locale, initI18n, setLocale, localeSelect } from './i18n.js';
 import { installKeys, bindGlobalKeys, bindGoKeys, setPageKeys, setSingleKeys, showKeyHelp, kbd } from './keys.js';
@@ -159,7 +161,7 @@ function levelBar(counts, keys = ['L0', 'L1', 'L2', 'E1']) {
 function evidenceCell(v) {
   const e = v?.evidence || {};
   const parts = (e.objectIds || []).map(id => idLink(id));
-  if (e.sourceRef) parts.push(`<span class="cell-sub" title="${esc(e.sourceRef)}">${esc(t('來源：{ref}', { ref: e.sourceRef }))}</span>`);
+  if (e.sourceRef) parts.push(evidenceSourceHtml(e.sourceRef));
   if (e.actionId) parts.push(`<span class="cell-sub">${esc(t('校驗：{id}', { id: e.actionId }))}</span>`);
   return parts.join(' ') || `<span class="muted">${t('無證據')}</span>`;
 }
@@ -253,6 +255,13 @@ const OPS = {
     });
   }
 };
+
+OPS.viewEvidenceSource = (_id, data) => {
+  const info = evidenceSourceInfo(data.sourceRef);
+  if (!info) return;
+  modal(t('證據來源'), `${info.href ? `<p><a href="${esc(info.href)}" target="_blank" rel="noopener noreferrer">${esc(t('打開原始來源'))} ↗</a></p>` : ''}<label class="field"><span>${t('完整來源')}</span><textarea class="evidence-source-full" readonly rows="5">${esc(info.text)}</textarea></label>`, { label: t('複製來源'), run: async () => { await copy(info.text); return true; } });
+};
+OPS.copyEvidenceSource = (_id, data) => copy(data.sourceRef);
 
 document.addEventListener('click', async e => {
   const b = e.target.closest('[data-op]');
@@ -414,7 +423,7 @@ PAGES.subject = async ({ param }) => {
       </div></div>`;
     const paging = { page: 1, size: 10, sizes: [10, 20, 50] };
     let assertionLevel = 'active';
-    const filteredAssertions = () => card.assertions.filter(a => assertionLevel === 'all' || (assertionLevel === 'active' ? a.level !== 'E1' : a.level === assertionLevel));
+    const filteredAssertions = () => card.assertions.filter(a => assertionLevel === 'all' || (assertionLevel === 'active' ? a.level !== 'E1' : a.level === assertionLevel)).sort(compareDdlCommentsFirst);
     const renderAssertions = () => {
       const assertions = filteredAssertions();
       $('#subject-assertions h2').textContent = t('斷言（{n}）', { n: assertions.length });

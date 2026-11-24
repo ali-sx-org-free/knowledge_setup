@@ -94,7 +94,7 @@ export function parseSyntax(text, syntax, { all = false } = {}) {
 }
 
 /** 在瀏覽器裡篩選與計數（斷言、客體、關係、重驗隊列：一次載入全部）。 */
-export function localSource({ load, text, views = {}, sorts = {}, groups }) {
+export function localSource({ load, text, views = {}, sorts = {}, tieBreak, groups }) {
   let all = null;
   const data = async force => (all && !force ? all : (all = await load()));
   const viewOk = (st, row) => !st.view || !views[st.view] || views[st.view](row);
@@ -122,7 +122,7 @@ export function localSource({ load, text, views = {}, sorts = {}, groups }) {
       const x = fn(a);
       const y = fn(b);
       const c = typeof x === 'string' || typeof y === 'string' ? String(x ?? '').localeCompare(String(y ?? '')) : (x ?? 0) - (y ?? 0);
-      return c * dir || String(a.id).localeCompare(String(b.id));
+      return c * dir || tieBreak?.(a, b) || String(a.id).localeCompare(String(b.id));
     });
   };
   return {
@@ -328,7 +328,7 @@ export function mountWorkspace(root, cfg) {
     const id = String(r.id);
     const s = sel.has(id);
     const focus = st.focus === id;
-    return `<tr class="ws-row${focus ? ' focused' : ''}${s ? ' selected' : ''}" data-id="${esc(id)}" aria-selected="${s}"${cfg.drop ? ' draggable="true"' : ''}><td class="check-cell"><input type="checkbox" data-sel ${s ? 'checked' : ''} aria-label="${esc(t('選擇 {name}', { name: r.name || id }))}" tabindex="-1"></td>${visibleCols().map(c => `<td class="${c.cls || ''}${c.edit ? ' ws-editable' : ''}"${c.edit ? ` data-edit="${esc(c.key)}" title="${esc(t('點擊修改'))}"` : ''}>${c.render(r, api)}</td>`).join('')}${cfg.rowActions?.length ? `<td class="ws-acts">${cfg.rowActions.filter(a => !a.when || a.when(r)).map(a => `<button type="button" class="text-btn" data-act="${esc(a.key)}">${esc(a.label)}</button>`).join('')}</td>` : ''}</tr>`;
+    return `<tr class="ws-row${focus ? ' focused' : ''}${s ? ' selected' : ''}" data-id="${esc(id)}" tabindex="${focus ? 0 : -1}" aria-selected="${s}"${cfg.drop ? ' draggable="true"' : ''}><td class="check-cell"><input type="checkbox" data-sel ${s ? 'checked' : ''} aria-label="${esc(t('選擇 {name}', { name: r.name || id }))}" tabindex="-1"></td>${visibleCols().map(c => `<td class="${c.cls || ''}${c.edit ? ' ws-editable' : ''}"${c.edit ? ` data-edit="${esc(c.key)}" title="${esc(t('點擊修改'))}"` : ''}>${c.render(r, api)}</td>`).join('')}${cfg.rowActions?.length ? `<td class="ws-acts">${cfg.rowActions.filter(a => !a.when || a.when(r)).map(a => `<button type="button" class="text-btn" data-act="${esc(a.key)}">${esc(a.label)}</button>`).join('')}</td>` : ''}</tr>`;
   }
   function bodyRows() {
     if (!st.group) return rows.map(rowHtml).join('');
@@ -379,7 +379,7 @@ export function mountWorkspace(root, cfg) {
     syncAllBox();
   }
   function renderFoot() {
-    $('#ws-foot', root).innerHTML = `<span>${esc(t('已顯示 {n} / {total}', { n: rows.length, total }))}</span>${cfg.footExtra?.() || ''}<span class="ws-keys">${kbd('j')} ${kbd('k')} ${t('移動')} · ${kbd('x')} ${t('選中')} · ${kbd('Enter')} ${t('打開')} · ${kbd('?')} ${t('全部快捷鍵')}</span>`;
+    $('#ws-foot', root).innerHTML = `<span>${esc(t('已顯示 {n} / {total}', { n: rows.length, total }))}</span>${cfg.footExtra?.() || ''}<span class="ws-keys">${kbd('j')} ${kbd('k')} ${t('移動')} · ${kbd('Space')} / ${kbd('x')} ${t('勾選 / 取消')} · ${kbd('shift+j')} / ${kbd('shift+k')} ${t('連選')} · ${kbd('Enter')} ${t('打開')} · ${kbd('?')} ${t('全部快捷鍵')}</span>`;
   }
   let observer = null;
   function observe() {
@@ -440,11 +440,13 @@ export function mountWorkspace(root, cfg) {
 
   // ---- 焦點與預覽
   let previewTimer;
-  function setFocus(id, { scroll = true } = {}) {
+  function setFocus(id, { scroll = true, keyboard = false } = {}) {
     st.focus = id;
-    $$('tr.ws-row.focused', root).forEach(tr => tr.classList.remove('focused'));
+    $$('tr.ws-row.focused', root).forEach(tr => { tr.classList.remove('focused'); tr.tabIndex = -1; });
     const tr = id ? $(`tr[data-id="${CSS.escape(id)}"]`, root) : null;
     tr?.classList.add('focused');
+    if (tr) tr.tabIndex = 0;
+    if (keyboard) tr?.focus({ preventScroll: true });
     if (scroll) tr?.scrollIntoView({ block: 'nearest' });
     syncUrl();
     clearTimeout(previewTimer);
@@ -463,7 +465,7 @@ export function mountWorkspace(root, cfg) {
     i = i < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, i + delta));
     const id = String(rows[i].id);
     if (extend) { sel.add(id); if (st.focus) sel.add(st.focus); syncSelection(); }
-    setFocus(id);
+    setFocus(id, { keyboard: true });
     if (i >= rows.length - 5) loadMore();
   }
   function rememberContext() {
@@ -692,6 +694,7 @@ export function mountWorkspace(root, cfg) {
     const r = rows.find(x => String(x.id) === id);
     const act = el.closest('[data-act]');
     if (act) { const a = cfg.rowActions.find(x => x.key === act.dataset.act); try { await a?.run(r, api); } catch (err) { showError(err); } return; }
+    if (el.closest('button[data-op]')) return; // 來源詳情/複製等按鈕不移動行焦點或觸發行內編輯。
     if (el.closest('a')) { if (el.closest('a.ws-open')) { e.preventDefault(); openRow(r, e.metaKey || e.ctrlKey); } return; }
     if (el.closest('input[data-sel]') || e.shiftKey) {
       if (e.shiftKey && anchor) {
@@ -702,13 +705,13 @@ export function mountWorkspace(root, cfg) {
       anchor = id;
       selectAllPending = false;
       syncSelection();
-      if (el.closest('input[data-sel]')) return;
+      if (el.closest('input[data-sel]')) { setFocus(id, { scroll: false }); return; }
     }
     const cell = el.closest('td[data-edit]');
     if (cell && !cell.querySelector('input')) return startEdit(cell, r);
     anchor = id;
     if (window.innerWidth < 700) return openRow(r);
-    setFocus(id, { scroll: false });
+    setFocus(id, { scroll: false, keyboard: true });
   });
   root.addEventListener('dblclick', e => {
     const tr = e.target.closest('tr.ws-row');
@@ -801,10 +804,16 @@ export function mountWorkspace(root, cfg) {
     { keys: '/', desc: t('聚焦列表搜索'), run: () => { $('#ws-q', root).focus(); $('#ws-q', root).select(); } },
     { keys: 'j,ArrowDown', desc: t('下一個（預覽跟著換）'), run: () => move(1), when: inList },
     { keys: 'k,ArrowUp', desc: t('上一個'), run: () => move(-1), when: inList },
-    { keys: 'shift+j', desc: t('往下連續選擇'), run: () => move(1, true), when: inList },
-    { keys: 'shift+k', desc: t('往上連續選擇'), run: () => move(-1, true), when: inList },
+    { keys: 'shift+j,shift+ArrowDown', desc: t('往下連續選擇'), run: () => move(1, true), when: inList },
+    { keys: 'shift+k,shift+ArrowUp', desc: t('往上連續選擇'), run: () => move(-1, true), when: inList },
     { keys: 'Enter', desc: t('打開'), run: () => openRow(focusedRow()), when: () => inList() && !!st.focus },
-    { keys: 'x', desc: t('選中 / 取消選中當前行'), run: () => { if (st.focus) { sel.has(st.focus) ? sel.delete(st.focus) : sel.add(st.focus); anchor = st.focus; syncSelection(); } }, when: inList },
+    { keys: 'x,Space', desc: t('選中 / 取消選中當前行'), run: e => {
+      if (e.repeat) return; // 長按只切換一次，同時阻止空格捲動頁面。
+      sel.has(st.focus) ? sel.delete(st.focus) : sel.add(st.focus);
+      anchor = st.focus;
+      selectAllPending = false;
+      syncSelection();
+    }, when: e => inList() && !!focusedRow() && (![' ', 'Spacebar'].includes(e.key) || !e.target.closest?.('a, button, input, summary, [role="button"]')) },
     { keys: 'mod+a', desc: t('全選'), run: () => { rows.forEach(r => sel.add(String(r.id))); selectAllPending = true; syncSelection(); }, when: inList },
     { keys: '[', desc: t('收起或展開導航欄'), run: () => setLayout('nav', !layout.nav) },
     { keys: ']', desc: t('收起或展開預覽'), run: () => (window.innerWidth < 1280 ? wsEl.classList.toggle('preview-open') : setLayout('preview', !layout.preview)) },

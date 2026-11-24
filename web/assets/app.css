@@ -45,6 +45,11 @@ td .actions{flex-wrap:nowrap}
 .kv dt,.kv dd{margin:0;padding:7px 0;border-bottom:1px solid var(--line)}
 .kv dt{color:var(--muted)}
 .kv dd{min-width:0;overflow-wrap:anywhere}
+.evidence-source{display:flex;align-items:center;gap:4px;margin-top:5px;width:max-content;max-width:100%;font-size:12px;line-height:1.5}
+.evidence-source-link{font-weight:500;white-space:nowrap}
+.evidence-source-tool{padding:2px 4px;line-height:1.3;min-width:24px;min-height:24px}
+.evidence-source-tool:focus-visible{outline:2px solid var(--blue);outline-offset:2px;border-radius:3px}
+.evidence-source-full{width:100%;font-family:var(--mono);overflow-wrap:anywhere;resize:vertical}
 .stack-sm{display:grid;gap:8px}
 .inline-form{display:flex;gap:8px;align-items:end;flex-wrap:wrap}
 .inline-form label.field{margin:0}
@@ -435,6 +440,7 @@ kbd{display:inline-block;min-width:18px;padding:0 5px;border:1px solid #d5deea;b
 .ws-grid.standard td{padding:9px 12px}
 .ws-row.focused td{background:#f3f8ff}
 .ws-row.focused td:first-child{box-shadow:inset 3px 0 0 var(--blue)}
+.ws-row:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
 .ws-row.selected td{background:#e8f2ff}
 .ws-name-cell{white-space:normal;min-width:200px;max-width:420px}
 .ws-name-cell strong{color:var(--ink)}

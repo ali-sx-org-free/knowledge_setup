@@ -136,12 +136,30 @@ export function download(name, text, type = 'application/json') {
 }
 
 export async function copy(text) {
+  let copied = false;
   try {
     await navigator.clipboard.writeText(text);
-    toast(t('已複製'));
-  } catch {
-    toast(t('無法使用剪貼簿，請手動選取複製'));
+    copied = true;
+  } catch { /* HTTP 部署沒有 Clipboard API，改用同步選取複製。 */ }
+  if (!copied) {
+    const focus = document.activeElement;
+    const selection = document.getSelection();
+    const ranges = selection ? Array.from({ length: selection.rangeCount }, (_, i) => selection.getRangeAt(i).cloneRange()) : [];
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.readOnly = true;
+    area.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+    // 模態對話框之外的元素是 inert；複製來源詳情時必須放在對話框內。
+    (document.querySelector('dialog[open]') || document.body).append(area);
+    try { area.select(); copied = document.execCommand('copy'); } catch { /* 留下可選取的原文供手動複製。 */ }
+    finally {
+      area.remove();
+      focus?.focus({ preventScroll: true });
+      if (selection) { selection.removeAllRanges(); ranges.forEach(range => selection.addRange(range)); }
+    }
   }
+  toast(copied ? t('已複製') : t('無法使用剪貼簿，請手動選取複製'));
+  return copied;
 }
 
 // ---- API

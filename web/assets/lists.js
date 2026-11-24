@@ -2,6 +2,7 @@
 import { $$, esc, toast, modal, showError, download, get, post, level, pill, vpill, tag, fmtTime, field, input, structuredValueText } from './core.js';
 import { t, tk, tv } from './i18n.js';
 import { mountWorkspace, localSource, setListContext } from './workspace.js';
+import { ddlCommentPriority, compareDdlCommentsFirst } from './assertion-order.js';
 
 let C = null;
 const schema = () => C.schema();
@@ -79,7 +80,8 @@ async function pageAssertions() {
       load: () => get('/api/v1/assertions'),
       text: r => `${r.id} ${r.content} ${r.subject?.name || ''} ${r.subject?.id || ''} ${r.structured?.key || ''}`,
       views: { all: () => true, active: r => r.validity.level !== 'E1', pending: r => !!r.validity.pending, review: r => r.validity.level === 'L1' && evidenceKind(r.validity) !== 'none' },
-      sorts: { id: r => r.id, subject: r => r.subject?.name || '', level: r => LEVELS.indexOf(r.validity.level), expires: r => (r.validity.expiresAt ? Date.parse(r.validity.expiresAt) : Infinity) },
+      sorts: { ddl_comment: ddlCommentPriority, id: r => r.id, subject: r => r.subject?.name || '', level: r => LEVELS.indexOf(r.validity.level), expires: r => (r.validity.expiresAt ? Date.parse(r.validity.expiresAt) : Infinity) },
+      tieBreak: compareDdlCommentsFirst,
       groups: [
         { key: 'level', values: r => [r.validity.level] },
         { key: 'type', values: r => [r.type] },
@@ -110,7 +112,7 @@ async function pageAssertions() {
       { key: 'expires', label: t('有效期至'), sort: 'expires', render: r => fmtTime(r.validity.expiresAt) },
       { key: 'ops', label: t('操作'), def: true, render: r => C.rowOps(r.id, r.validity.level) }
     ],
-    sorts: [['id', 'ID'], ['subject', t('主體')], ['level', t('層級')], ['expires', t('有效期至')]], defaultSort: 'id',
+    sorts: [['ddl_comment', t('原始 DDL 注釋優先')], ['id', 'ID'], ['subject', t('主體')], ['level', t('層級')], ['expires', t('有效期至')]], defaultSort: 'ddl_comment',
     groupBy: [['subject', t('主體'), r => [r.subject?.id, r.subject?.name || '—']], ['type', t('類型'), r => [r.type, tv(r.type)]], ['level', t('層級'), r => [r.validity.level, r.validity.level]]],
     preview: (r, el) => itemPreview(r, el, esc(r.content)),
     bulk: [

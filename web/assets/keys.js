@@ -13,7 +13,7 @@ const GO = [];
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent || '');
 export const modLabel = isMac ? '⌘' : 'Ctrl';
 /** 'mod+a' → '⌘A'；顯示在按鈕和說明中。 */
-export const keyLabel = k => k.split(' ').map(part => part.split('+').map(x => ({ mod: modLabel, shift: '⇧', alt: isMac ? '⌥' : 'Alt', Enter: 'Enter', Escape: 'Esc', ArrowDown: '↓', ArrowUp: '↑' }[x] || (x.length === 1 ? x.toUpperCase() : x))).join(isMac ? '' : '+')).join(' ');
+export const keyLabel = k => k.split(' ').map(part => part.split('+').map(x => ({ mod: modLabel, shift: '⇧', alt: isMac ? '⌥' : 'Alt', Space: t('空格'), Enter: 'Enter', Escape: 'Esc', ArrowDown: '↓', ArrowUp: '↑' }[x] || (x.length === 1 ? x.toUpperCase() : x))).join(isMac ? '' : '+')).join(' ');
 export const kbd = k => `<kbd>${esc(keyLabel(k))}</kbd>`;
 
 export function setSingleKeys(on) { singleKeys = on !== false; }
@@ -31,8 +31,8 @@ function comboOf(e) {
   const parts = [];
   if (e.metaKey || e.ctrlKey) parts.push('mod');
   if (e.altKey) parts.push('alt');
-  const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
-  if (e.shiftKey && /^[a-z]$/.test(key)) parts.push('shift');
+  const key = e.key === ' ' || e.key === 'Spacebar' ? 'Space' : e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (e.shiftKey && (/^[a-z]$/.test(key) || ['ArrowDown', 'ArrowUp', 'Space'].includes(key))) parts.push('shift');
   parts.push(key);
   return parts.join('+');
 }
