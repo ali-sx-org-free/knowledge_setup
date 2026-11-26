@@ -544,7 +544,7 @@ export function confirmableItems(store, subjectIds, principal) {
     const v = item.validity;
     if (v.level !== 'L1' || !hasEvidence(v)) return;
     let reason = null;
-    try { store.assertOwner(principal, subject); } catch (err) { reason = err.message; }
+    try { store.confirmMode(principal, { kind, item, subject }); } catch (err) { reason = err.message; }
     if (!reason && kind === 'binding' && store.objects.get(item.objectId)?.status === '下線') reason = tr('客體已下線，綁定不能晉升');
     out.push({ id: item.id, kind, subject: store.subjectSummary(subject), summary, evidence: v.evidence, pending: v.pending || null, version: store.reviewVersion(item), canConfirm: !reason, reason });
   };

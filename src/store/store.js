@@ -6,7 +6,7 @@ import path from 'node:path';
 import YAML from 'yaml';
 import {
   SUBJECT_TYPES, RELATION_TYPES, ASSERTION_TYPES, OBJECT_CATEGORIES, OBJECT_STATUS, ACTION_KINDS, PIPELINE_TYPES,
-  DEFAULT_EXPIRY_DAYS, DEFAULT_DOMAINS, LEVEL_INFO, LEVEL_RANK, ID_PREFIX, kindOfId, maxLevel
+  DEFAULT_EXPIRY_DAYS, DEFAULT_DOMAINS, LEVEL_INFO, LEVEL_RANK, ID_PREFIX, kindOfId, maxLevel, hasScope, SCOPE_CONFIRM_ASSERTIONS
 } from './model.js';
 import {
   RuleError, normalizeValidity, hasEvidence, sourceOf, capSubmittedLevel, transition, setPending, clearPending,
@@ -624,6 +624,41 @@ export class KnowledgeStore {
     if (!principal.isAdmin && !['contributor', 'owner'].includes(principal.role) && principal.kind !== 'pipeline') throw new RuleError(tr('此身份只有消費權限，不能提交知識'), 403, 'forbidden');
   }
 
+  /**
+   * 誰能把條目確認為 L0。返回確認方式：
+   *   manual     管理員、負責人（人）：原有規則不變（智能體、管道不能晉升；有指定負責人時只有他們能確認）。
+   *   delegated  持 assertions:confirm 的 API 金鑰（智能體或非負責人的人），代為執行用戶已授權的確認：
+   *              只能確認斷言（綁定、關係仍需負責人），同樣受指定負責人限制。管道金鑰不適用。
+   * 請求中的說明（note）只寫入審計，從不參與這裡的判斷。
+   */
+  confirmMode(principal, ref) {
+    if (!principal) throw new RuleError(tr('需要身份驗證'), 401, 'unauthorized');
+    const isOwner = principal.isAdmin || (principal.kind === 'human' && principal.role === 'owner');
+    if (!isOwner && principal.kind !== 'pipeline' && hasScope(principal, SCOPE_CONFIRM_ASSERTIONS)) {
+      if (ref.kind !== 'assertion') throw new RuleError(tr('金鑰權限 assertions:confirm 只能確認斷言；{id} 不是斷言，需要負責人確認', { id: ref.item.id }), 403, 'scope_mismatch');
+      if (ref.subject?.ownerIds?.length && !ref.subject.ownerIds.includes(principal.id)) throw new RuleError(tr('你不是 {id} 的指定負責人', { id: ref.subject.id }), 403, 'forbidden');
+      return 'delegated';
+    }
+    this.assertOwner(principal, ref.subject);
+    return 'manual';
+  }
+
+  /**
+   * 確認前核對（單條與批量共用）：只有 L1 能晉升，且內容必須仍是審閱時的版本（reviewVersion）。
+   *   授權確認（delegated）必須附版本；負責人附了版本就核對，沒附時保持原行為。
+   *   renew：負責人單條確認、未附版本時，可對 L0 續期（原有行為）。
+   */
+  assertReviewed(ref, version, { mode, renew = false, staleCode = 'stale_item' } = {}) {
+    const { id, validity: v } = ref.item;
+    if (mode === 'delegated' && (typeof version !== 'string' || !version)) throw new RuleError(tr('授權確認必須附審閱版本 version（讀取接口返回的 reviewVersion）'), 400, 'version_required');
+    if (v.level === 'L0' && !(renew && version == null)) throw new RuleError(tr('{id} 已是 L0，不需要再確認', { id }), 409, 'already_confirmed');
+    if (v.level === 'E1') throw new RuleError(tr('E1（失效）知識不能晉升；請提交新的知識並指向替代關係'), 409, 'invalid_transition');
+    if (v.level === 'L2') throw new RuleError(tr('L2 不能直接晉升 L0：先補充客體證據（L2 → L1），再校驗或確認（L1 → L0）'), 409, 'invalid_transition');
+    if (version != null && reviewVersion(ref.item) !== version) {
+      throw new RuleError(staleCode === 'stale_assertion' ? tr('斷言 {id} 已變更，請重新整理並核對後再審批', { id }) : tr('{id} 已變更，請重新整理並核對後再確認', { id }), 409, staleCode);
+    }
+  }
+
   assertOwner(principal, subject) {
     if (!principal) throw new RuleError(tr('需要身份驗證'), 401, 'unauthorized');
     if (principal.kind === 'agent') throw new RuleError(tr('智能體不能晉升、裁決或判定失效；請由負責人確認或通過 Action 校驗'), 403, 'agent_cannot_promote');
@@ -953,40 +988,46 @@ export class KnowledgeStore {
     return { id, level: v.level, evidence: v.evidence };
   }
 
-  /** 負責人確認：L1 → L0（或續期）。智能體不能晉升。 */
+  /** 批量確認斷言：每條都必須是斷言、仍是 L1 且與審閱時的版本一致，否則整批回滾。 */
   confirmAssertions(t, items, note, principal) {
     return items.map(({ id, version }) => {
       const ref = this.getItem(id);
-      if (ref.kind !== 'assertion' || ref.item.validity.level !== 'L1' || reviewVersion(ref.item) !== version) {
-        throw new RuleError(tr('斷言 {id} 已變更，請重新整理並核對後再審批', { id }), 409, 'stale_assertion');
+      if (ref.kind !== 'assertion') {
+        this.confirmMode(principal, ref); // 只有斷言權限的金鑰在這裡就被拒絕（403）
+        throw new RuleError(tr('{id} 不是斷言；確認綁定、關係請用 POST /items/confirm-batch', { id }), 400, 'not_assertion');
       }
-      return this.confirm(t, id, { note }, principal);
+      return this.confirm(t, id, { note, version }, principal, { staleCode: 'stale_assertion' });
     });
   }
 
   /** 批量確認（斷言、綁定、關係）：每條都必須仍是 L1 且與審閱時的版本一致，否則整批回滾。 */
   confirmItems(t, items, note, principal) {
-    return items.map(({ id, version }) => {
-      const ref = this.getItem(id);
-      if (ref.item.validity.level !== 'L1' || reviewVersion(ref.item) !== version) {
-        throw new RuleError(tr('{id} 已變更，請重新整理並核對後再確認', { id }), 409, 'stale_item');
-      }
-      return this.confirm(t, id, { note }, principal);
-    });
+    return items.map(({ id, version }) => this.confirm(t, id, { note, version }, principal));
   }
 
-  confirm(t, id, input, principal) {
+  /**
+   * 確認：L1 → L0（負責人單條確認、未附版本時也可對 L0 續期）。權限見 confirmMode，核對見 assertReviewed。
+   * input：{ note?, version?, expiryDays? }；授權確認不接受 expiryDays，有效期按規則參數計算。
+   */
+  confirm(t, id, input, principal, { staleCode = 'stale_item' } = {}) {
     const ref = this.getItem(id);
-    this.assertOwner(principal, ref.subject);
+    const mode = this.confirmMode(principal, ref);
+    const version = input?.version || null;
+    this.assertReviewed(ref, version, { mode, renew: mode === 'manual', staleCode });
     const v = ref.item.validity;
     if (ref.kind === 'binding' && this.objects.get(ref.item.objectId)?.status === '下線') throw new RuleError(tr('客體已下線，綁定不能晉升'), 409, 'object_offline');
     if (ref.kind === 'relation' && ref.item.type === '擁有') this.assertSingleOwner(ref.item);
     const at = nowIso();
-    const days = Number(input?.expiryDays) || this.expiryDaysFor(ref.kind, ref.item, ref.subject);
-    promoteToL0(v, { method: 'manual', by: principal.id, expiresAt: addDays(at, days), note: clean(input?.note), at });
+    let days = this.expiryDaysFor(ref.kind, ref.item, ref.subject);
+    if (input?.expiryDays != null && input.expiryDays !== '') {
+      if (mode === 'delegated') t.warn(tr('授權確認的有效期按規則參數計算，已忽略 expiryDays'));
+      else days = Number(input.expiryDays) || days;
+    }
+    const audit = mode === 'delegated' ? { version, scope: SCOPE_CONFIRM_ASSERTIONS } : version ? { version } : null;
+    promoteToL0(v, { method: mode, by: principal.id, expiresAt: addDays(at, days), note: clean(input?.note), audit, at });
     this.touchItem(t, ref);
-    this.resolveFeedbackFor(t, id, `負責人 ${principal.name || principal.id} 已確認`);
-    return { id, level: v.level, expiresAt: v.expiresAt };
+    this.resolveFeedbackFor(t, id, mode === 'delegated' ? `授權金鑰 ${principal.name || principal.id}（${principal.id}）已確認` : `負責人 ${principal.name || principal.id} 已確認`);
+    return { id, level: v.level, expiresAt: v.expiresAt, method: v.method, verifiedBy: v.verifiedBy };
   }
 
   /** 判定失效：→ E1，保留並指向替代者。 */
