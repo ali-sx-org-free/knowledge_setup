@@ -104,6 +104,12 @@ export const ID_PREFIX = {
   template: 'TPL'
 };
 
+// API 金鑰的附加權限（scopes）：角色之外、由管理員逐把金鑰授予的單項能力。值是 API 的值，不翻譯。
+//   assertions:confirm  確認斷言 L1 → L0（只限斷言，必須附審閱版本；見 docs/api/assertion-confirm.md）
+export const SCOPE_CONFIRM_ASSERTIONS = 'assertions:confirm';
+export const API_KEY_SCOPES = [SCOPE_CONFIRM_ASSERTIONS];
+export const hasScope = (principal, scope) => Array.isArray(principal?.scopes) && principal.scopes.includes(scope);
+
 // 文檔庫（見 docs/design/document-library.md）：狀態、修訂狀態、模板類別、欄位類型。枚舉值是 API 的值，保持繁體原文。
 export const DOC_STATUS = ['草稿', '待審', '已發布', '已廢止'];
 export const DOC_REVISION = ['修訂中', '修訂待審'];

@@ -1,6 +1,7 @@
 // 身份與權限：API 金鑰（三方智能體 / 人 / 管道）與後台會話。
 import crypto from 'node:crypto';
 import { tr } from '../i18n/index.js';
+import { API_KEY_SCOPES, SCOPE_CONFIRM_ASSERTIONS, hasScope } from '../store/model.js';
 
 export const ROLE_ORDER = { consumer: 0, contributor: 1, owner: 2 };
 const SESSION_TTL_MS = 12 * 3600 * 1000;
@@ -18,7 +19,9 @@ export class HttpError extends Error {
 export const ADMIN_PRINCIPAL = Object.freeze({ id: 'admin', name: '管理員', kind: 'human', role: 'owner', isAdmin: true });
 
 function principalFromKey(k) {
-  return { id: k.id, name: k.name, kind: k.kind, role: k.kind === 'pipeline' ? 'contributor' : k.role, isAdmin: false };
+  // scopes：管理員單獨授予的附加權限（見 model.js 的 API_KEY_SCOPES），只疊加在「智能體 + 貢獻者」金鑰上。
+  const scopes = k.kind === 'agent' && k.role === 'contributor' ? (Array.isArray(k.scopes) ? k.scopes : []).filter(x => API_KEY_SCOPES.includes(x)) : [];
+  return { id: k.id, name: k.name, kind: k.kind, role: k.kind === 'pipeline' ? 'contributor' : k.role, isAdmin: false, scopes };
 }
 
 function parseCookies(header) {
@@ -114,6 +117,17 @@ export function requireRole(role) {
     if ((ROLE_ORDER[effective] ?? -1) < ROLE_ORDER[role]) return next(new HttpError(403, tr('此操作需要 {role} 權限', { role }), 'forbidden'));
     next();
   };
+}
+
+/**
+ * 確認端點的入口：負責人角色，或持 assertions:confirm 權限的金鑰。這裡只放行；
+ * 能確認哪些條目（金鑰只限斷言、指定負責人、層級與審閱版本）由 store.confirmMode / assertReviewed 逐條判斷。
+ */
+export function requireConfirm(req, res, next) {
+  const p = req.principal;
+  if (!p) return next(new HttpError(401, tr('需要身份驗證：請帶 Authorization: Bearer <API 金鑰>'), 'unauthorized'));
+  if (p.isAdmin || (p.kind !== 'pipeline' && p.role === 'owner') || (p.kind === 'agent' && p.role === 'contributor' && hasScope(p, SCOPE_CONFIRM_ASSERTIONS))) return next();
+  next(new HttpError(403, tr('此操作需要 owner 權限，或金鑰權限 {scope}（只能確認斷言）', { scope: SCOPE_CONFIRM_ASSERTIONS }), 'forbidden'));
 }
 
 export function requireAdmin(req, res, next) {

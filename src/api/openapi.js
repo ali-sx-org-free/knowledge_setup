@@ -1,7 +1,10 @@
 // 精簡 OpenAPI 3.1 描述，方便三方智能體框架自動生成工具定義。說明文字按請求語言返回；枚舉值保持原文。
 import { tr, tk, currentLocale } from '../i18n/index.js';
+import { VERSION } from '../version.js';
 
-const E = (method, path, summary, role, { body, query, tag } = {}) => ({ method, path, summary, role, body, query, tag });
+const E = (method, path, summary, role, { body, query, tag, scope } = {}) => ({ method, path, summary, role, body, query, tag, scope });
+// 確認端點：負責人，或持此附加權限的 API 金鑰（只能確認斷言，必須附 reviewVersion）
+const CONFIRM_SCOPE = 'assertions:confirm';
 
 const ENDPOINTS = [
   E('get', '/prompt', tk('拉取智能體教程（Markdown）；?role=producer|consumer&format=json'), 'public', { tag: tk('教程'), query: ['role', 'format'] }),
@@ -17,10 +20,10 @@ const ENDPOINTS = [
   E('get', '/subjects/{id}/history', tk('主體檔案的 Git 版本歷史'), 'consumer', { tag: tk('消費') }),
   E('get', '/graph', tk('圖譜子圖'), 'consumer', { tag: tk('消費'), query: ['focus', 'depth', 'domain', 'types', 'relationTypes', 'levels', 'aliases', 'e1'] }),
   E('get', '/objects', tk('客體列表'), 'consumer', { tag: tk('消費'), query: ['category', 'status', 'q'] }),
-  E('get', '/assertions', tk('斷言列表'), 'consumer', { tag: tk('消費'), query: ['level', 'type', 'subjectId', 'q', 'pending'] }),
-  E('post', '/assertions/confirm-batch', tk('批量審批所選 L1 斷言'), 'owner', { tag: tk('負責人'), body: { items: '[{id,version:reviewVersion}]', note: 'string' } }),
+  E('get', '/assertions', tk('斷言列表（含 reviewVersion）'), 'consumer', { tag: tk('消費'), query: ['level', 'type', 'subjectId', 'q', 'pending'] }),
+  E('post', '/assertions/confirm-batch', tk('批量確認所選 L1 / L2 斷言為 L0：每條附審閱版本，沒有證據時附 evidence，任何一條不符整批拒絕；note 只寫入審計'), 'owner', { tag: tk('負責人'), scope: CONFIRM_SCOPE, body: { items: '[{id,version:reviewVersion,evidence?:{objectIds,sourceRef}}]', note: 'string' } }),
   E('get', '/relations', tk('關係列表（含 reviewVersion）'), 'consumer', { tag: tk('消費'), query: ['type', 'level', 'subjectId'] }),
-  E('get', '/items/{id}', tk('帶有效性的條目（B-/A-/R-）'), 'consumer', { tag: tk('消費') }),
+  E('get', '/items/{id}', tk('帶有效性的條目（B-/A-/R-），含 reviewVersion'), 'consumer', { tag: tk('消費') }),
   E('post', '/actions/{id}/invoke', tk('調用取值 Action 獲取實時動態值'), 'consumer', { tag: tk('消費'), body: { inputs: 'object' } }),
   E('post', '/feedback', tk('反饋知識有誤（觸發降級與重驗）'), 'consumer', { tag: tk('消費'), body: { targetId: 'string', comment: 'string', question: 'string' } }),
   E('post', '/subjects', tk('新建主體'), 'contributor', { tag: tk('生產'), body: { name: 'string', type: '系統|業務對象|流程|規則|指標|別名', domain: 'string', definition: 'string', owner: 'string', errorCost: 'integer 1-5', aliasOf: 'string[]', tags: 'string[]' } }),
@@ -49,8 +52,8 @@ const ENDPOINTS = [
   E('get', '/gaps', tk('知識缺口（未收錄查詢）'), 'contributor', { tag: tk('治理') }),
   E('get', '/queue', tk('重驗隊列（按 使用頻率 × 出錯代價 排序）'), 'contributor', { tag: tk('治理') }),
   E('get', '/metrics', tk('健康指標'), 'contributor', { tag: tk('治理'), query: ['days'] }),
-  E('post', '/items/{id}/confirm', tk('負責人確認 L1 → L0（僅限人）'), 'owner', { tag: tk('負責人'), body: { note: 'string', expiryDays: 'integer' } }),
-  E('post', '/items/confirm-batch', tk('批量確認條目為 L0（僅限人）：每條附審閱版本，條目已變更時整批拒絕'), 'owner', { tag: tk('負責人'), body: { items: '[{id,version:reviewVersion}]', note: 'string' } }),
+  E('post', '/items/{id}/confirm', tk('確認 L1 / L2 → L0：負責人，或疊加了 assertions:confirm 的智能體金鑰（只限斷言，必須附 version）'), 'owner', { tag: tk('負責人'), scope: CONFIRM_SCOPE, body: { version: 'reviewVersion', evidence: '{objectIds, sourceRef}', note: 'string', expiryDays: 'integer' } }),
+  E('post', '/items/confirm-batch', tk('批量確認條目為 L0：每條附審閱版本，條目已變更時整批拒絕；assertions:confirm 金鑰只能包含斷言'), 'owner', { tag: tk('負責人'), scope: CONFIRM_SCOPE, body: { items: '[{id,version:reviewVersion,evidence?:{objectIds,sourceRef}}]', note: 'string' } }),
   E('post', '/items/{id}/invalidate', tk('判定失效 → E1'), 'owner', { tag: tk('負責人'), body: { reason: 'string', replacedBy: 'string' } }),
   E('post', '/conflicts/{id}/resolve', tk('裁決衝突'), 'owner', { tag: tk('負責人'), body: { winner: 'string', reason: 'string' } }),
   E('post', '/validate-all', tk('對全部可校驗知識執行校驗'), 'owner', { tag: tk('負責人'), body: { onlyPending: 'boolean' } }),
@@ -121,18 +124,19 @@ export function buildOpenApi(baseUrl) {
       summary: tr(e.summary),
       tags: [tr(e.tag)],
       operationId: `${e.method}_${e.path.replace(/[{}]/g, '').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_|_$/g, '')}`,
-      description: tr('所需角色：{role}', { role: e.role }),
+      description: e.scope ? tr('所需角色：{role}；或 API 金鑰附加權限 {scope}', { role: e.role, scope: e.scope }) : tr('所需角色：{role}', { role: e.role }),
       'x-role': e.role,
+      'x-scopes': e.scope ? [e.scope] : undefined,
       parameters: params.length ? params : undefined,
       requestBody: e.body ? { required: true, content: { 'application/json': { schema: schemaFor(e.body) } } } : undefined,
-      responses: { 200: { description: tr('成功：{shape}', { shape: '{ data, commit?, warnings? }' }) }, 202: { description: tr('已受理，異步執行：{shape}', { shape: '{ data: { executionId, state, statusUrl } }' }) }, 400: { description: tr('輸入錯誤') }, 401: { description: tr('未認證') }, 403: { description: tr('權限不足') }, 422: { description: tr('違反知識規則') } },
+      responses: { 200: { description: tr('成功：{shape}', { shape: '{ data, commit?, warnings? }' }) }, 202: { description: tr('已受理，異步執行：{shape}', { shape: '{ data: { executionId, state, statusUrl } }' }) }, 400: { description: tr('輸入錯誤') }, 401: { description: tr('未認證') }, 403: { description: tr('權限不足') }, ...(e.scope ? { 409: { description: tr('條目狀態不符或已變更（already_confirmed、invalid_transition、missing_evidence、stale_*）') } } : {}), 422: { description: tr('違反知識規則') } },
       security: e.role === 'public' ? [] : undefined
     };
     (paths[e.path] ||= {})[e.method] = op;
   }
   return {
     openapi: '3.1.0',
-    info: { title: tr('供應鏈技術知識體系 API'), version: '0.1.0', description: tr('生產型 API 供三方智能體生產與管理知識；消費型 API 返回結構化知識與自然語言答案。先 GET /prompt 閱讀教程。'), 'x-locale': currentLocale() },
+    info: { title: tr('供應鏈技術知識體系 API'), version: VERSION, description: tr('生產型 API 供三方智能體生產與管理知識；消費型 API 返回結構化知識與自然語言答案。先 GET /prompt 閱讀教程。'), 'x-locale': currentLocale() },
     servers: [{ url: `${baseUrl.replace(/\/+$/, '')}/api/v1` }],
     components: { securitySchemes: { bearer: { type: 'http', scheme: 'bearer', description: tr('後台「接入 › API 金鑰」創建') } } },
     security: [{ bearer: [] }],

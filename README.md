@@ -197,7 +197,7 @@ RPA 支持 `expectedRevision` 時（[RPA PR #32](https://github.com/ali-sx-org-f
 | 有效性字段附在綁定、斷言、關係三處 | `src/store/validity.js` |
 | 主體綜合層級 = 有效綁定中的最高層級，無有效綁定為 L2（只讀，不入庫） | `KnowledgeStore.subjectLevel` |
 | 寫入上限：人或智能體附證據最高 L1、無證據 L2、不能寫 L0；管道按校驗結果定級 | `capSubmittedLevel` |
-| 上行只有 L2→L1（補證據）與 L1→L0（Action 校驗或負責人確認）；智能體不能晉升 | `addEvidence`、`confirm`、`assertOwner` |
+| 上行只有 L2→L1（補證據）與 L1→L0（Action 校驗或負責人確認）；智能體不能晉升，除非管理員在「智能體 + 貢獻者」金鑰上疊加 `assertions:confirm`（只限斷言、L1 / L2 → L0、必須附審閱版本，見 [授權確認](docs/api/assertion-confirm.md)） | `addEvidence`、`confirm`、`assertOwner`、`confirmMode` |
 | 到期、校驗不符、衝突、反饋錯誤先降回 L1 並排入重驗；E1 不刪除、指向替代者 | `demoteToL1`、`invalidate` |
 | 客體下線：綁定轉 E1，以它為證據的斷言和關係降為 L1 | `takeObjectOffline` |
 | 衝突不設獨立狀態：雙方降 L1，裁決後一方 L0、另一方 E1 | `reportConflict`、`resolveConflict` |
@@ -215,7 +215,7 @@ RPA 支持 `expectedRevision` 時（[RPA PR #32](https://github.com/ali-sx-org-f
 
 ## API 概覽
 
-認證：`Authorization: Bearer <API 金鑰>`。角色：`consumer`（讀與問答）、`contributor`（另可提交知識）、`owner`（只能是人；確認晉升、裁決、判定失效、配置動力層）。管道金鑰提交的知識按管道校驗結果直接定級。回應格式 `{ data, commit?, warnings? }`，錯誤 `{ error: { code, message } }`。完整列表見後台「接入 › API 參考」或 `GET /api/v1/openapi.json`。
+認證：`Authorization: Bearer <API 金鑰>`。角色：`consumer`（讀與問答）、`contributor`（另可提交知識）、`owner`（只能是人；確認晉升、裁決、判定失效、配置動力層）。管道金鑰提交的知識按管道校驗結果直接定級。不新增類型或角色：管理員可以在「智能體 + 貢獻者」金鑰上疊加附加權限 `assertions:confirm`，讓智能體在用戶明確同意後把已審閱的 L1、L2 斷言確認為 L0（只限斷言、必須附 `reviewVersion`，L0 仍需證據，沒有時在確認請求中附來源；審計記為該金鑰），用法、授予方法和錯誤碼見 [docs/api/assertion-confirm.md](docs/api/assertion-confirm.md)。回應格式 `{ data, commit?, warnings? }`，錯誤 `{ error: { code, message } }`。完整列表見後台「接入 › API 參考」或 `GET /api/v1/openapi.json`。
 
 ```bash
 # 三方智能體拉取教程（公開）

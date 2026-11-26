@@ -1,11 +1,12 @@
 // /api/v1：生產型 API（三方智能體生產與管理知識）+ 消費型 API（獲取結構化知識與自然語言答案）。
 import path from 'node:path';
 import express from 'express';
-import { requireRole, requireAdmin, HttpError } from './auth.js';
+import { requireRole, requireAdmin, requireConfirm, HttpError } from './auth.js';
 import { buildPrompt, buildSchema } from '../services/prompt.js';
 import { buildOpenApi } from './openapi.js';
+import { VERSION } from '../version.js';
 import { RuleError } from '../store/validity.js';
-import { kindOfId } from '../store/model.js';
+import { kindOfId, SCOPE_CONFIRM_ASSERTIONS } from '../store/model.js';
 import { tr } from '../i18n/index.js';
 import { RpaClient, RpaError, conformance, draftAction } from '../services/rpa.js';
 import { executionView } from '../services/executions.js';
@@ -95,7 +96,7 @@ export function v1Router(ctx) {
   });
   r.get('/schema', (req, res) => ok(res, buildSchema(S())));
   r.get('/openapi.json', (req, res) => res.json(buildOpenApi(baseUrlOf(ctx, req))));
-  r.get('/status', (req, res) => ok(res, { ok: true, version: '0.1.0', llm: ctx.llm.enabled ? { provider: 'openrouter', model: ctx.llm.model } : null, git: req.principal ? { remote: S().repo.status.remote, branch: S().repo.status.branch } : undefined }));
+  r.get('/status', (req, res) => ok(res, { ok: true, version: VERSION, llm: ctx.llm.enabled ? { provider: 'openrouter', model: ctx.llm.model } : null, git: req.principal ? { remote: S().repo.status.remote, branch: S().repo.status.branch } : undefined }));
 
   // ------------------------------------------------------------ 消費：讀取
   r.get('/resolve', consumer, (req, res) => {
@@ -188,7 +189,7 @@ export function v1Router(ctx) {
   r.get('/relations', consumer, (req, res) => ok(res, S().listRelations({ type: req.query.type, level: req.query.level, subjectId: req.query.subjectId })));
   r.get('/items/:id', consumer, (req, res) => {
     const ref = S().getItem(req.params.id);
-    ok(res, { kind: ref.kind, subject: S().subjectSummary(ref.subject), ...(ref.kind === 'relation' ? S().relationView(ref.item) : ref.item) });
+    ok(res, { kind: ref.kind, subject: S().subjectSummary(ref.subject), ...(ref.kind === 'relation' ? S().relationView(ref.item) : ref.item), reviewVersion: S().reviewVersion(ref.item) });
   });
   r.get('/graph', consumer, (req, res) => ok(res, S().graph({
     domain: req.query.domain, types: list(req.query.types), relationTypes: list(req.query.relationTypes), levels: list(req.query.levels),
@@ -335,28 +336,36 @@ export function v1Router(ctx) {
     if (!Array.isArray(ids) || !ids.length || ids.length > 500) throw new HttpError(400, tr('subjectIds 必須為 1–{n} 個主體 ID', { n: 500 }), 'invalid_input');
     ok(res, await ctx.actions.validateSubjects(ids, req.principal));
   });
-  // 批量確認為 L0：先列出所選主體下全部有證據的 L1 條目（附審閱版本），逐條勾選後一次確認
+  // 確認為 L0（單條與批量共用同一套權限與核對）：
+  //   負責人（人）照舊；疊加了 assertions:confirm 的智能體金鑰只能確認斷言，且必須附讀取時拿到的審閱版本（reviewVersion）。
+  //   L1、L2 都可以確認為 L0；L0 必須有證據，沒有時在每條的 evidence 中一併提供。
+  //   批量在一個事務裡：任何一條不符（已變更、已是 L0、沒有證據、越權…）整批回滾，不會部分成功。note 只寫入審計。
+  const badEvidence = e => e != null && (typeof e !== 'object' || Array.isArray(e));
+  const confirmBody = (body, what) => {
+    const { items, note } = body || {};
+    if (!Array.isArray(items) || !items.length || items.length > 1000 || items.some(x => !x || typeof x.id !== 'string' || typeof x.version !== 'string' || badEvidence(x.evidence)) ||
+        new Set(items.map(x => x.id)).size !== items.length || (note != null && typeof note !== 'string')) {
+      throw new HttpError(400, what === 'assertion' ? tr('請提供不重複的斷言 ID 與審閱版本') : tr('請提供不重複的條目 ID 與審閱版本'), 'invalid_input');
+    }
+    return { items, note };
+  };
+  const confirmedBy = p => (p.isAdmin || p.role === 'owner' ? `負責人 ${p.name}` : `授權金鑰 ${p.name}（${p.id}，${SCOPE_CONFIRM_ASSERTIONS}）`);
   r.post('/items/confirmable', contributor, (req, res) => ok(res, confirmableItems(S(), req.body?.subjectIds, req.principal)));
-  r.post('/items/confirm-batch', owner, async (req, res) => {
-    const { items, note } = req.body || {};
-    if (!Array.isArray(items) || !items.length || items.length > 1000 || items.some(x => !x || typeof x.id !== 'string' || typeof x.version !== 'string') ||
-        new Set(items.map(x => x.id)).size !== items.length || (note != null && typeof note !== 'string')) {
-      throw new HttpError(400, tr('請提供不重複的條目 ID 與審閱版本'), 'invalid_input');
-    }
-    const out = await S().tx(req.principal, confirmItemsMessage(S(), items), t => S().confirmItems(t, items, note, req.principal));
+  r.post('/items/confirm-batch', requireConfirm, async (req, res) => {
+    const { items, note } = confirmBody(req.body, 'item');
+    const out = await S().tx(req.principal, `${confirmItemsMessage(S(), items)}（${confirmedBy(req.principal)}）`, t => S().confirmItems(t, items, note, req.principal));
     txOut(res, out);
   });
-  r.post('/items/:id/confirm', owner, async (req, res) => {
-    const out = await S().tx(req.principal, `[確認] ${req.params.id} → L0（負責人 ${req.principal.name}）`, t => S().confirm(t, req.params.id, req.body || {}, req.principal));
+  r.post('/items/:id/confirm', requireConfirm, async (req, res) => {
+    const body = req.body || {};
+    if ((body.version != null && typeof body.version !== 'string') || (body.note != null && typeof body.note !== 'string')) throw new HttpError(400, tr('version 與 note 必須為字串'), 'invalid_input');
+    if (badEvidence(body.evidence)) throw new HttpError(400, tr('evidence 必須為物件：{ objectIds, sourceRef }'), 'invalid_input');
+    const out = await S().tx(req.principal, `[確認] ${req.params.id} → L0（${confirmedBy(req.principal)}）`, t => S().confirm(t, req.params.id, body, req.principal));
     txOut(res, out);
   });
-  r.post('/assertions/confirm-batch', owner, async (req, res) => {
-    const { items, note } = req.body || {};
-    if (!Array.isArray(items) || !items.length || items.some(x => !x || typeof x.id !== 'string' || typeof x.version !== 'string') ||
-        new Set(items.map(x => x.id)).size !== items.length || (note != null && typeof note !== 'string')) {
-      throw new HttpError(400, tr('請提供不重複的斷言 ID 與審閱版本'), 'invalid_input');
-    }
-    const out = await S().tx(req.principal, `[批量審批] ${items.length} 條斷言 → L0`, t => S().confirmAssertions(t, items, note, req.principal));
+  r.post('/assertions/confirm-batch', requireConfirm, async (req, res) => {
+    const { items, note } = confirmBody(req.body, 'assertion');
+    const out = await S().tx(req.principal, `[批量審批] ${items.length} 條斷言 → L0（${confirmedBy(req.principal)}）`, t => S().confirmAssertions(t, items, note, req.principal));
     txOut(res, out);
   });
   r.post('/items/:id/invalidate', owner, async (req, res) => {

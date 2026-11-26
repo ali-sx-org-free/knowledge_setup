@@ -1684,5 +1684,19 @@ export default {
   "收起或展開預覽": "Hide or show the preview",
   "{name}（已選或當前行）": "{name} (selected or current row)",
   "逐層退出：收起選單 → 取消選擇 → 關閉預覽 → 清空搜索": "Step back: close menu → clear selection → close preview → clear search",
-
+  "授權確認（{by}）": "Delegated confirmation ({by})",
+  "授權確認（API 金鑰 {by}）": "Delegated confirmation (API key {by})",
+  "審閱版本 {v}": "Review version {v}",
+  "授予於 {time}": "Granted {time}",
+  "附加權限": "Extra permissions",
+  "收回確認權限": "Revoke confirm permission",
+  "授予確認權限": "Grant confirm permission",
+  "附加權限：允許確認斷言為 L0（assertions:confirm）": "Extra permission: allow confirming assertions as L0 (assertions:confirm)",
+  "為「{name}」（{id}）授予 assertions:confirm？": "Grant assertions:confirm to “{name}” ({id})?",
+  "收回「{name}」（{id}）的 assertions:confirm？之後它確認斷言會返回 403。": "Revoke assertions:confirm from “{name}” ({id})? Its confirmations will then return 403.",
+  "授予": "Grant",
+  "收回": "Revoke",
+  "授權確認（API 金鑰 assertions:confirm）": "Delegated confirmation (API key assertions:confirm)",
+  "授權金鑰 {name}（{id}）已確認": "Authorized key {name} ({id}) confirmed",
+  "附加權限 assertions:confirm：疊加在「智能體 + 貢獻者」金鑰上，允許它在用戶明確同意後把已審閱的 L1、L2 斷言確認為 L0（必須附審閱版本，沒有證據時一併提供來源；不能確認綁定和關係；有指定負責人的主體仍只限負責人）。審計記為這把金鑰，不會記成負責人。": "Extra permission assertions:confirm: added on top of an “agent + contributor” key, it lets the key confirm reviewed L1 and L2 assertions as L0 after the user explicitly agrees (a review version is required, and a source must be supplied when there is no evidence; bindings and relations cannot be confirmed; subjects with designated owners stay owner-only). The audit trail records this key, never an owner."
 };

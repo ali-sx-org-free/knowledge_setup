@@ -136,7 +136,14 @@ export function adminRouter(ctx) {
   // ---- API 金鑰
   r.get('/keys', requireAdmin, (req, res) => res.json({ data: ctx.settings.listApiKeys() }));
   r.post('/keys', requireAdmin, (req, res) => res.status(201).json({ data: ctx.settings.createApiKey(req.body || {}) }));
-  r.patch('/keys/:id', requireAdmin, (req, res) => res.json({ data: ctx.settings.setApiKeyDisabled(req.params.id, req.body?.disabled) }));
+  // 只改傳入的欄位：{ disabled } 停用 / 啟用；{ scopes: ['assertions:confirm'] } 授予附加權限，{ scopes: [] } 收回
+  r.patch('/keys/:id', requireAdmin, (req, res) => {
+    const { disabled, scopes } = req.body || {};
+    if (disabled === undefined && scopes === undefined) throw new HttpError(400, tr('請提供 disabled 或 scopes'), 'invalid_input');
+    const key = ctx.settings.updateApiKey(req.params.id, { disabled, scopes });
+    if (scopes !== undefined) ctx.logger?.log?.(`[knowledge] ${tr('金鑰 {id} 的附加權限：{scopes}', { id: key.id, scopes: key.scopes.join(', ') || '—' })}`);
+    res.json({ data: key });
+  });
   r.delete('/keys/:id', requireAdmin, (req, res) => {
     ctx.settings.deleteApiKey(req.params.id);
     res.json({ data: { ok: true } });
