@@ -534,7 +534,7 @@ export const batchFieldLabel = f => FIELD_LABEL[f] || f;
 
 // ------------------------------------------------------------------ 批量確認為 L0（斷言、綁定、關係）
 
-/** 所選主體下全部「有證據的 L1」條目（含以這些主體為起點的關係），附審閱版本與能否確認。 */
+/** 所選主體下全部「有證據的 L1 / L2」條目（含以這些主體為起點的關係），附審閱版本與能否確認。 */
 export function confirmableItems(store, subjectIds, principal) {
   if (!Array.isArray(subjectIds) || !subjectIds.length) throw bad(tr('請提供 subjectIds'));
   if (subjectIds.length > MAX_BATCH) throw bad(tr('單次批量最多 {n} 個主體', { n: MAX_BATCH }));
@@ -542,7 +542,7 @@ export function confirmableItems(store, subjectIds, principal) {
   const out = [];
   const push = (kind, item, subject, summary) => {
     const v = item.validity;
-    if (v.level !== 'L1' || !hasEvidence(v)) return;
+    if (!['L1', 'L2'].includes(v.level) || !hasEvidence(v)) return;
     let reason = null;
     try { store.confirmMode(principal, { kind, item, subject }); } catch (err) { reason = err.message; }
     if (!reason && kind === 'binding' && store.objects.get(item.objectId)?.status === '下線') reason = tr('客體已下線，綁定不能晉升');

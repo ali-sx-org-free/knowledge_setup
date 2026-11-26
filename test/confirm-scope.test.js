@@ -127,10 +127,11 @@ test('審閱版本過期整批拒絕；層級、證據與已確認都明確說�
 
   const l2 = await producer('POST', `/api/v1/subjects/${subjectId}/assertions`, { type: '規則', content: '業務校驗主體：沒有證據的猜測' });
   assert.equal(l2.body.data.validity.level, 'L2');
-  const noEvidence = await confirmer('POST', '/api/v1/assertions/confirm-batch', { items: await selection([l2.body.data.id]) });
-  assert.equal(noEvidence.status, 409);
-  assert.equal(noEvidence.body.error.code, 'invalid_transition');
-  assert.match(noEvidence.body.error.message, /L2 不能直接晉升 L0/);
+  const noEvidence = await confirmer('POST', '/api/v1/assertions/confirm-batch', { items: await selection([l2.body.data.id, ids[1]]) });
+  assert.equal(noEvidence.status, 409, 'L2 沒有證據時不能到 L0');
+  assert.equal(noEvidence.body.error.code, 'missing_evidence');
+  assert.match(noEvidence.body.error.message, /evidence/);
+  assert.equal((await read(ids[1])).validity.level, 'L1', '同批的 L1 也沒有生效');
 
   const e1 = await producer('POST', `/api/v1/subjects/${subjectId}/assertions`, { type: '規則', content: '業務校驗主體：已過時的舊規則', level: 'E1', invalidReason: '虛構：已被新規則取代' });
   const invalid = await confirmer('POST', '/api/v1/assertions/confirm-batch', { items: await selection([e1.body.data.id]) });
@@ -142,6 +143,41 @@ test('審閱版本過期整批拒絕；層級、證據與已確認都明確說�
   assert.equal((await read(ids[1])).validity.level, 'L1');
 
   assert.equal((await confirmer('POST', '/api/v1/assertions/confirm-batch', { items: [{ id: ids[1] }] })).status, 400, '批量每條都要附版本');
+});
+
+test('L2 也能確認為 L0：沒有證據時在確認請求中一併提供，已有證據的 L2 直接晉升', async () => {
+  const { subjectId } = await fixture('L2 晉升主體');
+  const bare = (await producer('POST', `/api/v1/subjects/${subjectId}/assertions`, { type: '規則', content: 'L2 晉升主體：用戶口頭確認的規則' })).body.data;
+  const withSource = (await producer('POST', `/api/v1/subjects/${subjectId}/assertions`, { type: '規則', content: 'L2 晉升主體：提交時就附了來源', level: 'L2', evidence: { sourceRef: 'fictional://spec/l2-002' } })).body.data;
+  assert.deepEqual([bare.validity.level, withSource.validity.level], ['L2', 'L2']);
+
+  const [a, b] = await selection([bare.id, withSource.id]);
+  assert.equal((await confirmer('POST', '/api/v1/assertions/confirm-batch', { items: [{ ...a, evidence: 'fictional' }, b] })).status, 400, 'evidence 必須是物件');
+  const unknown = await confirmer('POST', '/api/v1/assertions/confirm-batch', { items: [{ ...a, evidence: { objectIds: ['O-9999'] } }, b] });
+  assert.equal(unknown.status, 422);
+  assert.equal(unknown.body.error.code, 'unknown_object');
+  assert.equal((await read(withSource.id)).validity.level, 'L2', '整批回滾');
+
+  const note = '用戶已審閱兩條 L2 斷言並確認晉升';
+  const r = await confirmer('POST', '/api/v1/assertions/confirm-batch', { items: [{ ...a, evidence: { sourceRef: 'fictional://review/2026-11-26' } }, b], note });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.data.map(x => x.level), ['L0', 'L0']);
+
+  const v1 = (await read(bare.id)).validity;
+  assert.equal(v1.evidence.sourceRef, 'fictional://review/2026-11-26');
+  assert.deepEqual(v1.history.slice(-2).map(h => [h.from, h.to, h.by]), [['L2', 'L1', confirmerKey.key.id], ['L1', 'L0', confirmerKey.key.id]]);
+  assert.equal(v1.history.at(-2).reason, '補充客體證據');
+  assert.equal(v1.history.at(-1).version, a.version, '審計記的是審閱時的版本');
+  const v2 = (await read(withSource.id)).validity;
+  assert.deepEqual([v2.history.at(-1).from, v2.history.at(-1).to, v2.method], ['L2', 'L0', 'delegated']);
+
+  const l2Owner = (await producer('POST', `/api/v1/subjects/${subjectId}/assertions`, { type: '規則', content: 'L2 晉升主體：負責人確認的 L2' })).body.data;
+  const ownerNoEvidence = await t.admin('POST', `/api/v1/items/${l2Owner.id}/confirm`, {});
+  assert.equal(ownerNoEvidence.status, 409);
+  assert.equal(ownerNoEvidence.body.error.code, 'missing_evidence');
+  const ownerOk = await t.admin('POST', `/api/v1/items/${l2Owner.id}/confirm`, { evidence: { sourceRef: 'fictional://owner/review' } });
+  assert.equal(ownerOk.status, 200, '負責人同樣可以 L2 → L0');
+  assert.equal(ownerOk.body.data.method, 'manual');
 });
 
 test('只有斷言確認權限時，不能確認綁定、關係，也不能做其他負責人操作', async () => {
@@ -241,6 +277,15 @@ test('管理員授予與收回權限：只改傳入欄位，立即生效；管�
   assert.equal(unknown.status, 400);
   assert.equal(unknown.body.error.code, 'invalid_scope');
   assert.equal((await t.admin('POST', '/admin/api/keys', { name: 'x', kind: 'agent', role: 'owner', scopes: [SCOPE] })).status, 400, '智能體仍不能是負責人');
+  // 只疊加在「智能體 + 貢獻者」上：不給只讀智能體、人類金鑰開這條路，也不新增類型或角色
+  for (const [kind, role] of [['agent', 'consumer'], ['human', 'contributor'], ['human', 'owner']]) {
+    const r = await t.admin('POST', '/admin/api/keys', { name: `虛構 ${kind}-${role}`, kind, role, scopes: [SCOPE] });
+    assert.equal(r.status, 400, `${kind}-${role}`);
+    assert.equal(r.body.error.code, 'invalid_scope');
+    assert.match(r.body.error.message, /智能體 \+ 貢獻者/);
+  }
+  const human = await issueKey({ name: '虛構人類貢獻者', kind: 'human', role: 'contributor' });
+  assert.equal((await t.admin('PATCH', `/admin/api/keys/${human.key.id}`, { scopes: [SCOPE] })).status, 400);
 });
 
 test('OpenAPI 與教程說明確認權限與審閱版本', async () => {
@@ -265,6 +310,8 @@ test('存儲層：沒有權限的智能體照舊被拒；管道即使帶 scopes 
     return { a: a.id };
   });
   const version = store.reviewVersion(store.getItem(result.a).item);
+  await store.load();
+  assert.equal(store.reviewVersion(store.getItem(result.a).item), version, '從磁碟重新載入（回滾、拉取遠端）後審閱版本不變');
   await assert.rejects(store.tx(AGENT, 'c', t => store.confirm(t, result.a, { version }, AGENT)), err => err.code === 'agent_cannot_promote');
   await assert.rejects(store.tx(PIPE, 'c', t => store.confirm(t, result.a, { version }, { ...PIPE, scopes: [SCOPE] })), err => err.status === 403);
   // 證據被移除（例如直接在 Git 裡改過）時，授權確認與負責人確認一樣被拒絕

@@ -67,12 +67,12 @@ test('關係類型閉集與方向約束', async () => {
   assert.equal(result.validity.level, 'L1');
 });
 
-test('層級遷移：L2 → L1 補證據；L1 → L0 只能由人類負責人確認；智能體不能晉升', async () => {
+test('層級遷移：L2 → L1 補證據；確認為 L0 需要證據且只能由人類負責人確認；智能體不能晉升', async () => {
   const { store } = await makeStore();
   const ids = await basics(store);
   const { result: a } = await store.tx(AGENT, 'a', t => store.createAssertion(t, ids.atp, { type: '約束', content: '計算結果為負時，對外按 0 展示', level: 'L0' }, AGENT));
   assert.equal(a.validity.level, 'L2');
-  await assert.rejects(store.tx(OWNER, 'c', t => store.confirm(t, a.id, {}, OWNER)), /L2 不能直接晉升 L0/);
+  await assert.rejects(store.tx(OWNER, 'c', t => store.confirm(t, a.id, {}, OWNER)), err => err.code === 'missing_evidence');
   await store.tx(AGENT, 'e', t => store.addEvidence(t, a.id, { objectIds: [ids.doc] }, AGENT));
   assert.equal(store.getItem(a.id).item.validity.level, 'L1');
   await assert.rejects(store.tx(AGENT, 'c', t => store.confirm(t, a.id, {}, AGENT)), err => err.code === 'agent_cannot_promote');

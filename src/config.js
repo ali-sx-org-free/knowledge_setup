@@ -188,14 +188,14 @@ export class Settings {
   }
 
   // ---- API 金鑰 ----
-  /** 附加權限（scopes）的校驗：只認 API_KEY_SCOPES 中的值；管道金鑰按校驗結果定級，不接受附加權限。 */
-  normalizeScopes(scopes, kind) {
+  /** 附加權限（scopes）的校驗：只認 API_KEY_SCOPES 中的值；只能疊加在「智能體 + 貢獻者」金鑰上（不新增類型或角色）。 */
+  normalizeScopes(scopes, kind, role) {
     if (scopes == null) return [];
     if (!Array.isArray(scopes) || scopes.some(x => typeof x !== 'string')) throw Object.assign(new Error(tr('scopes 必須為字串陣列')), { status: 400, code: 'invalid_input' });
     const out = [...new Set(scopes.map(x => x.trim()).filter(Boolean))];
     const unknown = out.filter(x => !API_KEY_SCOPES.includes(x));
     if (unknown.length) throw Object.assign(new Error(tr('未知的金鑰權限 {scopes}；可用：{values}', { scopes: unknown.join(', '), values: API_KEY_SCOPES.join(', ') })), { status: 400, code: 'invalid_scope' });
-    if (out.length && kind === 'pipeline') throw Object.assign(new Error(tr('管道金鑰不能授予附加權限；管道提交的知識按校驗結果定級')), { status: 400, code: 'invalid_scope' });
+    if (out.length && !(kind === 'agent' && role === 'contributor')) throw Object.assign(new Error(tr('附加權限只能疊加在「智能體 + 貢獻者」金鑰上')), { status: 400, code: 'invalid_scope' });
     return out;
   }
 
@@ -204,7 +204,7 @@ export class Settings {
     if (!['consumer', 'contributor', 'owner'].includes(role)) throw Object.assign(new Error(tr('{field} 必須為 {values}', { field: 'role', values: 'consumer / contributor / owner' })), { status: 400, code: 'invalid_input' });
     if (role === 'owner' && kind !== 'human') throw Object.assign(new Error(tr('負責人（owner）只能是人；智能體不能晉升知識')), { status: 400, code: 'owner_must_be_human' });
     if (!name || !String(name).trim()) throw Object.assign(new Error(tr('請填寫名稱')), { status: 400, code: 'invalid_input' });
-    const granted = this.normalizeScopes(scopes, kind);
+    const granted = this.normalizeScopes(scopes, kind, role);
     const secret = 'kk_' + crypto.randomBytes(24).toString('base64url');
     const id = (kind === 'agent' ? 'agent-' : kind === 'pipeline' ? 'pipe-' : 'user-') + crypto.randomBytes(4).toString('hex');
     const record = { id, name: String(name).trim(), kind, role, hash: sha256(secret), prefix: secret.slice(0, 9), createdAt: new Date().toISOString(), lastUsedAt: null, disabled: false, scopes: granted, ...(granted.length ? { scopesUpdatedAt: new Date().toISOString() } : {}) };
@@ -246,7 +246,7 @@ export class Settings {
   updateApiKey(id, { disabled, scopes } = {}) {
     const k = this.data.apiKeys.find(x => x.id === id);
     if (!k) throw Object.assign(new Error(tr('找不到該金鑰')), { status: 404, code: 'not_found' });
-    const next = scopes === undefined ? null : this.normalizeScopes(scopes, k.kind);
+    const next = scopes === undefined ? null : this.normalizeScopes(scopes, k.kind, k.role);
     if (disabled !== undefined) k.disabled = !!disabled;
     if (next) {
       if (JSON.stringify(next) !== JSON.stringify(k.scopes || [])) k.scopesUpdatedAt = new Date().toISOString();

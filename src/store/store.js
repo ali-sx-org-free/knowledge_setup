@@ -32,8 +32,13 @@ const DIRS = {
 const COLLECTION = { subject: 'subjects', object: 'objects', relation: 'relations', action: 'actions', pipeline: 'pipelines', conflict: 'conflicts', feedback: 'feedback', gap: 'gaps', template: 'docTemplates' };
 
 const nowIso = () => new Date().toISOString();
-const reviewVersion = assertion => createHash('sha256').update(JSON.stringify(assertion)).digest('hex');
+// 審閱版本：條目內容（含有效性與歷史）的 SHA-256。按寫入倉庫時的形態計算（去掉空值、鍵排序），
+// 所以從磁碟重新載入（事務回滾、拉取遠端）後不變，只有內容真的變了才變。
+const canonical = v => (Array.isArray(v) ? `[${v.map(canonical).join(',')}]` : v && typeof v === 'object' ? `{${Object.keys(v).sort().map(k => `${JSON.stringify(k)}:${canonical(v[k])}`).join(',')}}` : JSON.stringify(v));
+const reviewVersion = item => createHash('sha256').update(canonical(compact(item))).digest('hex');
 const clean = v => (typeof v === 'string' ? v.trim() : v);
+/** 授權確認只疊加在「智能體 + 貢獻者」金鑰上，不新增類型或角色。 */
+const canDelegateConfirm = p => p?.kind === 'agent' && p.role === 'contributor' && hasScope(p, SCOPE_CONFIRM_ASSERTIONS);
 const notFound = (what, id) => new RuleError(tr('找不到{what} {id}', { what: tr(what), id }), 404, 'not_found');
 
 function compact(value) {
@@ -627,14 +632,13 @@ export class KnowledgeStore {
   /**
    * 誰能把條目確認為 L0。返回確認方式：
    *   manual     管理員、負責人（人）：原有規則不變（智能體、管道不能晉升；有指定負責人時只有他們能確認）。
-   *   delegated  持 assertions:confirm 的 API 金鑰（智能體或非負責人的人），代為執行用戶已授權的確認：
-   *              只能確認斷言（綁定、關係仍需負責人），同樣受指定負責人限制。管道金鑰不適用。
+   *   delegated  疊加了 assertions:confirm 的「智能體 + 貢獻者」金鑰，代為執行用戶已授權的確認：
+   *              只能確認斷言（綁定、關係仍需負責人），同樣受指定負責人限制。不新增類型或角色。
    * 請求中的說明（note）只寫入審計，從不參與這裡的判斷。
    */
   confirmMode(principal, ref) {
     if (!principal) throw new RuleError(tr('需要身份驗證'), 401, 'unauthorized');
-    const isOwner = principal.isAdmin || (principal.kind === 'human' && principal.role === 'owner');
-    if (!isOwner && principal.kind !== 'pipeline' && hasScope(principal, SCOPE_CONFIRM_ASSERTIONS)) {
+    if (canDelegateConfirm(principal)) {
       if (ref.kind !== 'assertion') throw new RuleError(tr('金鑰權限 assertions:confirm 只能確認斷言；{id} 不是斷言，需要負責人確認', { id: ref.item.id }), 403, 'scope_mismatch');
       if (ref.subject?.ownerIds?.length && !ref.subject.ownerIds.includes(principal.id)) throw new RuleError(tr('你不是 {id} 的指定負責人', { id: ref.subject.id }), 403, 'forbidden');
       return 'delegated';
@@ -644,16 +648,16 @@ export class KnowledgeStore {
   }
 
   /**
-   * 確認前核對（單條與批量共用）：只有 L1 能晉升，且內容必須仍是審閱時的版本（reviewVersion）。
+   * 確認前核對（單條與批量共用）：L1、L2 能晉升（E1 不能），且內容必須仍是審閱時的版本（reviewVersion）。
    *   授權確認（delegated）必須附版本；負責人附了版本就核對，沒附時保持原行為。
    *   renew：負責人單條確認、未附版本時，可對 L0 續期（原有行為）。
+   * 證據要求在 promoteToL0：L2 通常沒有證據，確認時可在 evidence 中一併提供。
    */
   assertReviewed(ref, version, { mode, renew = false, staleCode = 'stale_item' } = {}) {
     const { id, validity: v } = ref.item;
     if (mode === 'delegated' && (typeof version !== 'string' || !version)) throw new RuleError(tr('授權確認必須附審閱版本 version（讀取接口返回的 reviewVersion）'), 400, 'version_required');
     if (v.level === 'L0' && !(renew && version == null)) throw new RuleError(tr('{id} 已是 L0，不需要再確認', { id }), 409, 'already_confirmed');
     if (v.level === 'E1') throw new RuleError(tr('E1（失效）知識不能晉升；請提交新的知識並指向替代關係'), 409, 'invalid_transition');
-    if (v.level === 'L2') throw new RuleError(tr('L2 不能直接晉升 L0：先補充客體證據（L2 → L1），再校驗或確認（L1 → L0）'), 409, 'invalid_transition');
     if (version != null && reviewVersion(ref.item) !== version) {
       throw new RuleError(staleCode === 'stale_assertion' ? tr('斷言 {id} 已變更，請重新整理並核對後再審批', { id }) : tr('{id} 已變更，請重新整理並核對後再確認', { id }), 409, staleCode);
     }
@@ -990,24 +994,26 @@ export class KnowledgeStore {
 
   /** 批量確認斷言：每條都必須是斷言、仍是 L1 且與審閱時的版本一致，否則整批回滾。 */
   confirmAssertions(t, items, note, principal) {
-    return items.map(({ id, version }) => {
+    return items.map(({ id, version, evidence }) => {
       const ref = this.getItem(id);
       if (ref.kind !== 'assertion') {
         this.confirmMode(principal, ref); // 只有斷言權限的金鑰在這裡就被拒絕（403）
         throw new RuleError(tr('{id} 不是斷言；確認綁定、關係請用 POST /items/confirm-batch', { id }), 400, 'not_assertion');
       }
-      return this.confirm(t, id, { note, version }, principal, { staleCode: 'stale_assertion' });
+      return this.confirm(t, id, { note, version, evidence }, principal, { staleCode: 'stale_assertion' });
     });
   }
 
-  /** 批量確認（斷言、綁定、關係）：每條都必須仍是 L1 且與審閱時的版本一致，否則整批回滾。 */
+  /** 批量確認（斷言、綁定、關係）：每條都必須仍是 L1 / L2 且與審閱時的版本一致，否則整批回滾。 */
   confirmItems(t, items, note, principal) {
-    return items.map(({ id, version }) => this.confirm(t, id, { note, version }, principal));
+    return items.map(({ id, version, evidence }) => this.confirm(t, id, { note, version, evidence }, principal));
   }
 
   /**
-   * 確認：L1 → L0（負責人單條確認、未附版本時也可對 L0 續期）。權限見 confirmMode，核對見 assertReviewed。
-   * input：{ note?, version?, expiryDays? }；授權確認不接受 expiryDays，有效期按規則參數計算。
+   * 確認：L1 / L2 → L0（負責人單條確認、未附版本時也可對 L0 續期）。權限見 confirmMode，核對見 assertReviewed。
+   * input：{ note?, version?, evidence?, expiryDays? }
+   *   evidence：{ objectIds?, sourceRef? }，在核對版本之後、晉升之前併入（同 addEvidence）；L2 因此先記一條 L2 → L1。
+   *   授權確認不接受 expiryDays，有效期按規則參數計算。
    */
   confirm(t, id, input, principal, { staleCode = 'stale_item' } = {}) {
     const ref = this.getItem(id);
@@ -1017,6 +1023,13 @@ export class KnowledgeStore {
     const v = ref.item.validity;
     if (ref.kind === 'binding' && this.objects.get(ref.item.objectId)?.status === '下線') throw new RuleError(tr('客體已下線，綁定不能晉升'), 409, 'object_offline');
     if (ref.kind === 'relation' && ref.item.type === '擁有') this.assertSingleOwner(ref.item);
+    if (input?.evidence) {
+      const extra = this.validateEvidence(input.evidence, t);
+      v.evidence.objectIds = [...new Set([...v.evidence.objectIds, ...extra.objectIds])];
+      if (extra.sourceRef) v.evidence.sourceRef = extra.sourceRef;
+      if (extra.actionId) v.evidence.actionId = extra.actionId;
+      if (v.level === 'L2' && hasEvidence(v)) transition(v, 'L1', { reason: '補充客體證據', by: principal.id });
+    }
     const at = nowIso();
     let days = this.expiryDaysFor(ref.kind, ref.item, ref.subject);
     if (input?.expiryDays != null && input.expiryDays !== '') {

@@ -59,7 +59,7 @@ ${table([tr('層級'), tr('條件'), tr('智能體用法')], Object.entries(LEVE
 
   const producerRules = `## ${tr('2. 你作為貢獻者必須遵守的寫入規則')}
 
-1. ${tr('**寫入上限**：你提交的知識附客體證據（`evidence.objectIds` 或明確來源 `evidence.sourceRef`）最高 L1，無證據只能 L2。**你不能寫入 L0**，也不能晉升自己或其他智能體提交的知識；請求 L0 會被自動降為 L1 並返回 warning。')} ${tr('唯一的例外見「授權確認」：管理員為你的金鑰授予 `assertions:confirm` 後，可以在用戶明確同意後代為確認斷言。')}
+1. ${tr('**寫入上限**：你提交的知識附客體證據（`evidence.objectIds` 或明確來源 `evidence.sourceRef`）最高 L1，無證據只能 L2。**你不能寫入 L0**，也不能晉升自己或其他智能體提交的知識；請求 L0 會被自動降為 L1 並返回 warning。')} ${tr('唯一的例外見「授權確認」：管理員在你的「智能體 + 貢獻者」金鑰上疊加 `assertions:confirm` 後，可以在用戶明確同意後代為確認斷言。')}
 2. ${tr('L0 只能通過 **Action 校驗**（`POST /validate/{id}`，結果由管道決定）或**負責人確認**得到。綁定用「客體存在」校驗；斷言必須用「比對內容」校驗，所以可自動驗證的斷言請帶 `structured: {key, value}`（如 `reserve.ttl = 30m`）。')}
 3. ${tr('**先登記客體，再引用證據**：證據必須是已登記的客體 ID。斷言的證據通常是主體已綁定的客體。')}
 4. ${tr('**一條斷言只說一件事**，便於單獨驗證、單獨失效。')}
@@ -139,11 +139,12 @@ curl -X POST ${api}/subjects/S-INV-0012/assertions \\
 \`\`\`
 ${tr('回應：{example}', { example: '`{"data": {"id": "A-0005", "validity": {"level": "L1", ...}}, "commit": "a1b2c3d", "warnings": []}`' })}
 
-### ${tr('授權確認（僅限持 assertions:confirm 的金鑰）')}
-${tr('管理員可以為你的金鑰單獨授予 `assertions:confirm`。有了它，你可以在**用戶已審閱並明確同意**之後，代為把 L1 斷言確認為 L0。沒有用戶的明確同意時不要調用，也不要自行判斷晉升；沒有這項權限時返回 403。')}
+### ${tr('授權確認（僅限疊加了 assertions:confirm 的金鑰）')}
+${tr('管理員可以在你的「智能體 + 貢獻者」金鑰上疊加 `assertions:confirm`（不改變類型和角色）。有了它，你可以在**用戶已審閱並明確同意**之後，代為把 L1 或 L2 斷言確認為 L0。沒有用戶的明確同意時不要調用，也不要自行判斷晉升；沒有這項權限時返回 403。')}
 
-1. ${tr('用 `GET {api}/assertions?subjectId=&level=L1` 或 `GET {api}/items/{id}` 讀取斷言，記下每條的 `reviewVersion`，把內容原樣交給用戶審閱。', { api })}
+1. ${tr('用 `GET {api}/assertions?subjectId=&level=L1`（或 `level=L2`）或 `GET {api}/items/{id}` 讀取斷言，記下每條的 `reviewVersion`，把內容原樣交給用戶審閱。', { api })}
 2. ${tr('用戶同意後調用 `POST {api}/assertions/confirm-batch`（單條用 `POST {api}/items/{id}/confirm`），每條都要附 `version`（即讀到的 reviewVersion）。`note` 寫明用戶如何確認，只寫入審計，不是授權憑據。', { api })}
+   ${tr('L0 必須有證據：L2 斷言通常沒有，確認時在該條的 `evidence` 中附上用戶審閱所依據的客體（`objectIds`）或來源（`sourceRef`），會先記一條 L2 → L1「補充客體證據」，再晉升 L0。')}
 3. ${tr('只能確認斷言（綁定、關係仍由負責人確認）；有指定負責人的主體只有他們能確認；有效期按規則參數計算（不接受 expiryDays）。')}
 4. ${tr('批量在一個事務裡：任何一條不符，整批不生效。409 `stale_assertion` / `stale_item`：內容在審閱後變了，重新讀取並請用戶再審；`already_confirmed`：已是 L0；`invalid_transition` / `missing_evidence`：層級或證據不滿足；403 `scope_mismatch`：不是斷言。')}
 5. ${tr('層級歷史記下你的金鑰 ID、審閱版本、說明和時間（method 為 `delegated`），Git 提交的作者是你的金鑰，不會記成負責人。')}
@@ -153,7 +154,7 @@ POST ${api}/assertions/confirm-batch
 {
   "items": [
     {"id": "A-0101", "version": "<reviewVersion>"},
-    {"id": "A-0102", "version": "<reviewVersion>"}
+    {"id": "A-0102", "version": "<reviewVersion>", "evidence": {"sourceRef": "https://wiki.example/inventory/rules-v2"}}
   ],
   "note": "用戶已在對話中逐條審閱並確認晉升為 L0"
 }

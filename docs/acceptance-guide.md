@@ -82,12 +82,12 @@ npm test
 **預期**：最後幾行為
 
 ```
-# tests 113
-# pass 113
+# tests 114
+# pass 114
 # fail 0
 ```
 
-其中 SSH 部署金鑰相關的 3 項需要本機有 OpenSSH（端到端一項還需要 `sshd`），沒有時會自動跳過（例如顯示為 `# skipped 3`，`# pass 110`）。
+其中 SSH 部署金鑰相關的 3 項需要本機有 OpenSSH（端到端一項還需要 `sshd`），沒有時會自動跳過（例如顯示為 `# skipped 3`，`# pass 111`）。
 
 這些測試覆蓋模型規則（寫入上限、晉升與降級、衝突、反饋、擁有關係唯一）、端到端流程（教程 API、權限、批量提交、6 個問答示例、Action 校驗、OpenRouter 模擬、Git 遠端推送與回拉、後台登入）、多語言（字典完整、錯誤與教程按語言返回、倉庫內容保持繁體）和文檔庫（生命週期與權限、修訂與降級、草稿衝突、文件夾與標籤、體檢、接管與廢止、Git 直接修改、段級搜索、Markdown 渲染安全），文檔庫第二期（Word 與 PDF 轉換、手冊、四眼審閱、內置校驗 Action、按章節預選、提取斷言、問答引用文檔、全局搜索、壓縮包導出、AI 起草），以及主體管理（多值篩選與排除、聯動計數、分頁、批量整理的權限與撤銷、批量校驗與確認、導入查重、批量關係、標籤共用、我的視圖，和 5000 個主體時的查詢耗時），以及授權金鑰確認斷言（`assertions:confirm` 的權限、審閱版本、越權與整批回滾、審計記錄）。自動化測試通過後，下面的手動驗收主要確認「你親眼看到的」與設計一致。
 
@@ -416,9 +416,9 @@ api $OWN POST /api/v1/items/A-0011/confirm '{"note":"驗收確認"}'
 **預期**
 
 1. HTTP 201，沒有證據，`validity.level` 為 `L2`。
-2. HTTP **409**：「L2 不能直接晉升 L0：先補充客體證據（L2 → L1），再校驗或確認（L1 → L0）」。
+2. HTTP **409**，`missing_evidence`：「晉升 L0 需要客體證據或明確來源：確認時在 evidence 中附 objectIds 或 sourceRef，或先補充證據」（L2 可以直接確認為 L0，但 L0 必須有證據）。
 3. HTTP 200，`level` 為 `L1`。
-4. HTTP **403**：「此操作需要 owner 權限」。
+4. HTTP **403**：「此操作需要 owner 權限，或金鑰權限 assertions:confirm（只能確認斷言）」。
 5. HTTP 200，`level` 為 `L0`，`expiresAt` 約為 180 天後（定義類斷言的有效期初值）。
 
 ### F2 使用反饋：L0 → L1 並排入重驗
@@ -1423,7 +1423,7 @@ api $CONT POST /api/v1/subjects/batch/undo '{"commit":"<上一步返回的 commi
 export CONF='kk_…審核助手的金鑰…'
 ```
 
-**預期**：列表的「附加權限」欄顯示 `assertions:confirm` 和授予時間。「冷啟動智能體」那一行的操作欄有 **授予確認權限**；「庫存域架構師」（負責人）和管道金鑰沒有這個按鈕。
+**預期**：列表的「附加權限」欄顯示 `assertions:confirm` 和授予時間，類型、角色仍是「智能體」「貢獻者」。「冷啟動智能體」那一行的操作欄有 **授予確認權限**；「問答智能體」（消費者）、「庫存域架構師」（人）和管道金鑰沒有這個按鈕。發放對話框裡把類型改成「人」或角色改成「消費者」，勾選框隨即隱藏。
 
 ### O2 確認成功
 
@@ -1456,10 +1456,18 @@ api $CONT POST /api/v1/assertions/confirm-batch '{"items":[{"id":"<A1>","version
 | 同一個請求再送一次 | HTTP 409，`already_confirmed` |
 | 新建一條斷言，記下版本後用 `$CONT` PATCH 改它的 `content`，再用舊版本確認 | HTTP 409，`stale_assertion`（重新讀取、重新審閱） |
 | `POST /api/v1/items/<A>/confirm` 不帶 `version` | HTTP 400，`version_required` |
-| 新建一條不帶 `evidence` 的斷言（L2），帶版本確認 | HTTP 409，`invalid_transition`「L2 不能直接晉升 L0」 |
+| 新建一條不帶 `evidence` 的斷言（L2），帶版本確認、不附 `evidence` | HTTP 409，`missing_evidence` |
 | 確認一個綁定（`B-…`）或關係（`R-…`），例如示例資料的 B-0001 | HTTP 403，`scope_mismatch` |
 | 一條 L1 斷言 + 一條已是 L0 的斷言放在同一批 | HTTP 409，L1 那條仍是 L1（不會部分成功） |
 | `POST /api/v1/items/<A>/invalidate` | HTTP 403（其他負責人操作不受這項權限影響） |
+
+最後確認 L2 也能一步到 L0：拿上表那條 L2 斷言的最新 `reviewVersion`，這次在該條中附上來源：
+
+```bash
+api $CONF POST /api/v1/assertions/confirm-batch '{"items":[{"id":"<L2 的 ID>","version":"<V>","evidence":{"sourceRef":"fictional://acceptance/O3"}}],"note":"用戶已確認"}'
+```
+
+**預期**：HTTP 200，`level` 為 L0。打開這條斷言：層級歷史最上面兩條是「L1 → L0 授權確認」和「L2 → L1 補充客體證據」，操作者都是審核助手的金鑰 ID。
 
 ### O4 收回權限
 
@@ -1471,7 +1479,7 @@ api $CONT POST /api/v1/assertions/confirm-batch '{"items":[{"id":"<A1>","version
 
 | 編號 | 驗收項 | 預期結果 | 結果 |
 | --- | --- | --- | --- |
-| 1 | 自動化測試 | 全部通過（113 項；沒有 OpenSSH 時 3 項跳過） | ☐ |
+| 1 | 自動化測試 | 全部通過（114 項；沒有 OpenSSH 時 3 項跳過） | ☐ |
 | A1 | 啟動服務 | 打印服務地址、知識倉庫、教程地址 | ☐ |
 | A2 | 登入保護 | 錯誤密碼被拒，正確密碼進入後台 | ☐ |
 | B1 | 載入示例資料 | 26 個主體；重複載入被拒 | ☐ |
@@ -1488,7 +1496,7 @@ api $CONT POST /api/v1/assertions/confirm-batch '{"items":[{"id":"<A1>","version
 | D3 | 後台登入限制 | 智能體金鑰被拒；負責人可登入但無設定頁 | ☐ |
 | E1 | 批量提交 | 一次提交；L0 請求降為 L1；無證據 L2 | ☐ |
 | E2 | 批量回滾 | 422 並返回出錯序號；無殘留 | ☐ |
-| F1 | 晉升路徑 | L2 不能直接確認；補證據 L1；負責人確認 L0 | ☐ |
+| F1 | 晉升路徑 | 沒有證據不能確認；補證據 L1；負責人確認 L0 | ☐ |
 | F2 | 使用反饋 | L0 降 L1 並排入重驗 | ☐ |
 | F3 | 衝突裁決 | 勝方 L0，敗方 E1 指向替代者 | ☐ |
 | F4 | 校驗不符 | 配置值變化使 L0 降為 L1 | ☐ |
@@ -1544,7 +1552,7 @@ api $CONT POST /api/v1/assertions/confirm-batch '{"items":[{"id":"<A1>","version
 | N12 | 主體管理 API | page.total、聯動計數、dryRun 計畫、提交與撤銷、重複撤銷 409、消費者 403 | ☐ |
 | O1 | 授予權限 | 發放時勾選或在列表中授予；附加權限欄顯示 assertions:confirm | ☐ |
 | O2 | 授權確認成功 | 無權限 403；授權金鑰 200、method delegated；層級歷史與提交記錄是金鑰身份 | ☐ |
-| O3 | 拒絕的情況 | 已確認、版本過期、缺版本、L2、綁定或關係、混合批量、判定失效都被拒，層級不變 | ☐ |
+| O3 | 拒絕的情況與 L2 | 已確認、版本過期、缺版本、沒有證據、綁定或關係、混合批量、判定失效都被拒，層級不變；L2 附來源後一步到 L0 | ☐ |
 | O4 | 收回權限 | 收回後 403；負責人後台確認照舊 | ☐ |
 
 ---

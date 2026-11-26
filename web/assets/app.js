@@ -983,20 +983,27 @@ PAGES.keys = async () => {
   const kindName = k => mapText(SOURCE_KIND, k);
   const CONFIRM = 'assertions:confirm';
   const hasConfirm = k => (k.scopes || []).includes(CONFIRM);
-  const confirmHelp = t('附加權限 assertions:confirm：允許這把金鑰在用戶明確同意後，把已審閱的 L1 斷言確認為 L0（必須附審閱版本；不能確認綁定和關係；有指定負責人的主體仍只限負責人）。審計記為這把金鑰，不會記成負責人。');
+  const confirmHelp = t('附加權限 assertions:confirm：疊加在「智能體 + 貢獻者」金鑰上，允許它在用戶明確同意後把已審閱的 L1、L2 斷言確認為 L0（必須附審閱版本，沒有證據時一併提供來源；不能確認綁定和關係；有指定負責人的主體仍只限負責人）。審計記為這把金鑰，不會記成負責人。');
+  const canGrant = k => k.kind === 'agent' && k.role === 'contributor';
   const scopeCell = k => (hasConfirm(k) ? `${pill(CONFIRM, 'amber')}${k.scopesUpdatedAt ? `<span class="cell-sub">${esc(t('授予於 {time}', { time: fmtTime(k.scopesUpdatedAt) }))}</span>` : ''}` : '—');
-  content().innerHTML = `<p class="notice" style="margin-bottom:12px">${t('角色：消費者只能讀取與問答；貢獻者可提交知識（最高 L1）；負責人（只能是人）可確認晉升、裁決衝突、判定失效。管道金鑰提交的知識按管道校驗結果直接定級。')} ${esc(confirmHelp)}</p>${panel(t('API 金鑰（{n}）', { n: list.length }), table([t('名稱'), 'ID', t('類型'), t('角色'), t('附加權限'), t('前綴'), t('建立'), t('最近使用'), t('狀態'), t('操作')], list.map(k => `<tr><td>${esc(k.name)}</td><td class="mono">${esc(k.id)}</td><td>${esc(kindName(k.kind))}</td><td>${esc(mapText(ROLE_TEXT, k.role))}</td><td>${scopeCell(k)}</td><td class="mono">${esc(k.prefix)}…</td><td>${fmtTime(k.createdAt)}</td><td>${ago(k.lastUsedAt)}</td><td>${k.disabled ? pill(t('已停用'), 'red') : pill(t('啟用'), 'green')}</td><td><div class="cell-actions">${k.kind === 'pipeline' || k.role === 'owner' ? '' : `<button class="text-btn scope-key" data-id="${esc(k.id)}" data-grant="${hasConfirm(k) ? '0' : '1'}">${hasConfirm(k) ? t('收回確認權限') : t('授予確認權限')}</button>`}<button class="text-btn toggle-key" data-id="${esc(k.id)}" data-disabled="${k.disabled ? '0' : '1'}">${k.disabled ? t('啟用') : t('停用')}</button><button class="text-btn del-key" data-id="${esc(k.id)}" style="color:var(--danger)">${t('刪除')}</button></div></td></tr>`), t('尚未發放金鑰')))}`;
-  $('#add-key').onclick = () => modal(t('發放 API 金鑰'), `${field(t('名稱'), input('name', '', `required placeholder="${esc(t('例如：庫存域冷啟動智能體'))}"`))}<div class="field-pair">${field(t('類型'), select('kind', [['agent', t('智能體')], ['human', t('人')], ['pipeline', t('管道（自動同步）')]], 'agent'))}${field(t('角色'), select('role', [['contributor', t('貢獻者：生產 + 消費')], ['consumer', t('消費者：只讀與問答')], ['owner', t('負責人（僅限人）')]], 'contributor'))}</div><label class="check"><input type="checkbox" name="confirmScope"> ${esc(t('附加權限：允許確認斷言為 L0（assertions:confirm）'))}</label><p class="muted" style="font-size:12px;margin-top:4px">${esc(confirmHelp)}</p>`, {
+  content().innerHTML = `<p class="notice" style="margin-bottom:12px">${t('角色：消費者只能讀取與問答；貢獻者可提交知識（最高 L1）；負責人（只能是人）可確認晉升、裁決衝突、判定失效。管道金鑰提交的知識按管道校驗結果直接定級。')} ${esc(confirmHelp)}</p>${panel(t('API 金鑰（{n}）', { n: list.length }), table([t('名稱'), 'ID', t('類型'), t('角色'), t('附加權限'), t('前綴'), t('建立'), t('最近使用'), t('狀態'), t('操作')], list.map(k => `<tr><td>${esc(k.name)}</td><td class="mono">${esc(k.id)}</td><td>${esc(kindName(k.kind))}</td><td>${esc(mapText(ROLE_TEXT, k.role))}</td><td>${scopeCell(k)}</td><td class="mono">${esc(k.prefix)}…</td><td>${fmtTime(k.createdAt)}</td><td>${ago(k.lastUsedAt)}</td><td>${k.disabled ? pill(t('已停用'), 'red') : pill(t('啟用'), 'green')}</td><td><div class="cell-actions">${!canGrant(k) && !hasConfirm(k) ? '' : `<button class="text-btn scope-key" data-id="${esc(k.id)}" data-grant="${hasConfirm(k) ? '0' : '1'}">${hasConfirm(k) ? t('收回確認權限') : t('授予確認權限')}</button>`}<button class="text-btn toggle-key" data-id="${esc(k.id)}" data-disabled="${k.disabled ? '0' : '1'}">${k.disabled ? t('啟用') : t('停用')}</button><button class="text-btn del-key" data-id="${esc(k.id)}" style="color:var(--danger)">${t('刪除')}</button></div></td></tr>`), t('尚未發放金鑰')))}`;
+  $('#add-key').onclick = () => { modal(t('發放 API 金鑰'), `${field(t('名稱'), input('name', '', `required placeholder="${esc(t('例如：庫存域冷啟動智能體'))}"`))}<div class="field-pair">${field(t('類型'), select('kind', [['agent', t('智能體')], ['human', t('人')], ['pipeline', t('管道（自動同步）')]], 'agent'))}${field(t('角色'), select('role', [['contributor', t('貢獻者：生產 + 消費')], ['consumer', t('消費者：只讀與問答')], ['owner', t('負責人（僅限人）')]], 'contributor'))}</div><div id="confirm-scope-row"><label class="check"><input type="checkbox" name="confirmScope"> ${esc(t('附加權限：允許確認斷言為 L0（assertions:confirm）'))}</label><p class="muted" style="font-size:12px;margin-top:4px">${esc(confirmHelp)}</p></div>`, {
     label: t('發放'),
     run: async () => {
       const { confirmScope, ...form } = formData($('#dialog-content'));
-      const r = await post('/admin/api/keys', { ...form, scopes: confirmScope && form.kind !== 'pipeline' && form.role !== 'owner' ? [CONFIRM] : [] });
+      const r = await post('/admin/api/keys', { ...form, scopes: confirmScope && canGrant(form) ? [CONFIRM] : [] });
       modal(t('金鑰已發放'), `<p class="notice warn">${t('金鑰只顯示這一次，請立即保存。')}</p><div class="copy-row" style="margin-top:10px"><code id="new-secret">${esc(r.data.secret)}</code><button class="button" id="copy-secret">${t('複製')}</button></div><p class="muted" style="font-size:12px;margin-top:10px">${t('使用方式：{usage}；教程地址：{url}', { usage: `<code>Authorization: Bearer ${esc(r.data.prefix)}…</code>`, url: `<code>${esc(location.origin)}/api/v1/prompt</code>` })}</p>`);
       $('#copy-secret').onclick = () => copy(r.data.secret);
       PAGES.keys();
       return true;
     }
   });
+    // 附加權限只疊加在「智能體 + 貢獻者」上：其他組合不顯示勾選框
+    const box = $('#dialog-content');
+    const sync = () => { $('#confirm-scope-row', box).hidden = !canGrant(formData(box)); };
+    $$('select', box).forEach(el => el.addEventListener('change', sync));
+    sync();
+  };
   $$('.toggle-key').forEach(b => (b.onclick = async () => { await patch(`/admin/api/keys/${b.dataset.id}`, { disabled: b.dataset.disabled === '1' }); render(); }));
   $$('.scope-key').forEach(b => (b.onclick = () => {
     const k = list.find(x => x.id === b.dataset.id);

@@ -113,16 +113,15 @@ export function demoteToL1(validity, reason, { by, note, at } = {}) {
   return changed;
 }
 
-// 人工確認的兩種方式：manual＝負責人（人）確認；delegated＝持 assertions:confirm 權限的 API 金鑰代為執行用戶已授權的確認。
-// 兩者的層級與證據要求相同；歷史與 verifiedBy 記真實執行身份，不把金鑰記成負責人。
+// 人工確認的兩種方式：manual＝負責人（人）確認；delegated＝持 assertions:confirm 權限的智能體金鑰代為執行用戶已授權的確認。
+// 兩者的層級與證據要求相同（L1 或 L2 都可以確認為 L0，但 L0 必須有證據）；歷史與 verifiedBy 記真實執行身份，不把金鑰記成負責人。
 const CONFIRM_METHODS = new Set(['manual', 'delegated']);
 const CONFIRM_REASON = { manual: '負責人確認', delegated: '授權確認（API 金鑰 assertions:confirm）' };
 
 /** audit：寫進這一條層級歷史的審計欄位（例如審閱版本 version、使用的權限 scope）。 */
 export function promoteToL0(validity, { method, by, expiresAt, note, actionId, audit, at = new Date().toISOString() }) {
   if (validity.level === 'E1') throw new RuleError(tr('E1（失效）知識不能晉升；請提交新的知識並指向替代關係'), 409, 'invalid_transition');
-  if (validity.level === 'L2' && CONFIRM_METHODS.has(method)) throw new RuleError(tr('L2 不能直接晉升 L0：先補充客體證據（L2 → L1），再校驗或確認（L1 → L0）'), 409, 'invalid_transition');
-  if (!hasEvidence(validity) && CONFIRM_METHODS.has(method)) throw new RuleError(tr('晉升 L0 需要客體證據'), 409, 'missing_evidence');
+  if (!hasEvidence(validity) && CONFIRM_METHODS.has(method)) throw new RuleError(tr('晉升 L0 需要客體證據或明確來源：確認時在 evidence 中附 objectIds 或 sourceRef，或先補充證據'), 409, 'missing_evidence');
   if (validity.level !== 'L0') transition(validity, 'L0', { reason: method === 'auto' ? `Action 校驗通過${actionId ? `（${actionId}）` : ''}` : CONFIRM_REASON[method] || '負責人確認', by, note, audit, at });
   else validity.history = [...validity.history, { at, from: 'L0', to: 'L0', reason: '重新驗證，延長有效期', by, ...(audit || {}) }].slice(-HISTORY_LIMIT);
   validity.method = method;

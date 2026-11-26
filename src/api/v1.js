@@ -337,11 +337,13 @@ export function v1Router(ctx) {
     ok(res, await ctx.actions.validateSubjects(ids, req.principal));
   });
   // 確認為 L0（單條與批量共用同一套權限與核對）：
-  //   負責人（人）照舊；持 assertions:confirm 的金鑰只能確認斷言，且必須附讀取時拿到的審閱版本（reviewVersion）。
-  //   批量在一個事務裡：任何一條不符（已變更、不是 L1、越權…）整批回滾，不會部分成功。note 只寫入審計。
+  //   負責人（人）照舊；疊加了 assertions:confirm 的智能體金鑰只能確認斷言，且必須附讀取時拿到的審閱版本（reviewVersion）。
+  //   L1、L2 都可以確認為 L0；L0 必須有證據，沒有時在每條的 evidence 中一併提供。
+  //   批量在一個事務裡：任何一條不符（已變更、已是 L0、沒有證據、越權…）整批回滾，不會部分成功。note 只寫入審計。
+  const badEvidence = e => e != null && (typeof e !== 'object' || Array.isArray(e));
   const confirmBody = (body, what) => {
     const { items, note } = body || {};
-    if (!Array.isArray(items) || !items.length || items.length > 1000 || items.some(x => !x || typeof x.id !== 'string' || typeof x.version !== 'string') ||
+    if (!Array.isArray(items) || !items.length || items.length > 1000 || items.some(x => !x || typeof x.id !== 'string' || typeof x.version !== 'string' || badEvidence(x.evidence)) ||
         new Set(items.map(x => x.id)).size !== items.length || (note != null && typeof note !== 'string')) {
       throw new HttpError(400, what === 'assertion' ? tr('請提供不重複的斷言 ID 與審閱版本') : tr('請提供不重複的條目 ID 與審閱版本'), 'invalid_input');
     }
@@ -357,6 +359,7 @@ export function v1Router(ctx) {
   r.post('/items/:id/confirm', requireConfirm, async (req, res) => {
     const body = req.body || {};
     if ((body.version != null && typeof body.version !== 'string') || (body.note != null && typeof body.note !== 'string')) throw new HttpError(400, tr('version 與 note 必須為字串'), 'invalid_input');
+    if (badEvidence(body.evidence)) throw new HttpError(400, tr('evidence 必須為物件：{ objectIds, sourceRef }'), 'invalid_input');
     const out = await S().tx(req.principal, `[確認] ${req.params.id} → L0（${confirmedBy(req.principal)}）`, t => S().confirm(t, req.params.id, body, req.principal));
     txOut(res, out);
   });

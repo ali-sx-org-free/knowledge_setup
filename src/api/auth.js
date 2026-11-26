@@ -19,8 +19,8 @@ export class HttpError extends Error {
 export const ADMIN_PRINCIPAL = Object.freeze({ id: 'admin', name: '管理員', kind: 'human', role: 'owner', isAdmin: true });
 
 function principalFromKey(k) {
-  // scopes：管理員單獨授予的附加權限（見 model.js 的 API_KEY_SCOPES）；管道金鑰不帶附加權限。
-  const scopes = k.kind === 'pipeline' ? [] : (Array.isArray(k.scopes) ? k.scopes : []).filter(x => API_KEY_SCOPES.includes(x));
+  // scopes：管理員單獨授予的附加權限（見 model.js 的 API_KEY_SCOPES），只疊加在「智能體 + 貢獻者」金鑰上。
+  const scopes = k.kind === 'agent' && k.role === 'contributor' ? (Array.isArray(k.scopes) ? k.scopes : []).filter(x => API_KEY_SCOPES.includes(x)) : [];
   return { id: k.id, name: k.name, kind: k.kind, role: k.kind === 'pipeline' ? 'contributor' : k.role, isAdmin: false, scopes };
 }
 
@@ -126,7 +126,7 @@ export function requireRole(role) {
 export function requireConfirm(req, res, next) {
   const p = req.principal;
   if (!p) return next(new HttpError(401, tr('需要身份驗證：請帶 Authorization: Bearer <API 金鑰>'), 'unauthorized'));
-  if (p.isAdmin || (p.kind !== 'pipeline' && p.role === 'owner') || (p.kind !== 'pipeline' && hasScope(p, SCOPE_CONFIRM_ASSERTIONS))) return next();
+  if (p.isAdmin || (p.kind !== 'pipeline' && p.role === 'owner') || (p.kind === 'agent' && p.role === 'contributor' && hasScope(p, SCOPE_CONFIRM_ASSERTIONS))) return next();
   next(new HttpError(403, tr('此操作需要 owner 權限，或金鑰權限 {scope}（只能確認斷言）', { scope: SCOPE_CONFIRM_ASSERTIONS }), 'forbidden'));
 }
 

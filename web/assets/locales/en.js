@@ -1687,7 +1687,6 @@ export default {
   "授權確認（{by}）": "Delegated confirmation ({by})",
   "授權確認（API 金鑰 {by}）": "Delegated confirmation (API key {by})",
   "審閱版本 {v}": "Review version {v}",
-  "附加權限 assertions:confirm：允許這把金鑰在用戶明確同意後，把已審閱的 L1 斷言確認為 L0（必須附審閱版本；不能確認綁定和關係；有指定負責人的主體仍只限負責人）。審計記為這把金鑰，不會記成負責人。": "Extra permission assertions:confirm: lets this key confirm reviewed L1 assertions as L0 after the user explicitly agrees (a review version is required; bindings and relations cannot be confirmed; subjects with designated owners stay owner-only). The audit trail records this key, never an owner.",
   "授予於 {time}": "Granted {time}",
   "附加權限": "Extra permissions",
   "收回確認權限": "Revoke confirm permission",
@@ -1698,5 +1697,6 @@ export default {
   "授予": "Grant",
   "收回": "Revoke",
   "授權確認（API 金鑰 assertions:confirm）": "Delegated confirmation (API key assertions:confirm)",
-  "授權金鑰 {name}（{id}）已確認": "Authorized key {name} ({id}) confirmed"
+  "授權金鑰 {name}（{id}）已確認": "Authorized key {name} ({id}) confirmed",
+  "附加權限 assertions:confirm：疊加在「智能體 + 貢獻者」金鑰上，允許它在用戶明確同意後把已審閱的 L1、L2 斷言確認為 L0（必須附審閱版本，沒有證據時一併提供來源；不能確認綁定和關係；有指定負責人的主體仍只限負責人）。審計記為這把金鑰，不會記成負責人。": "Extra permission assertions:confirm: added on top of an “agent + contributor” key, it lets the key confirm reviewed L1 and L2 assertions as L0 after the user explicitly agrees (a review version is required, and a source must be supplied when there is no evidence; bindings and relations cannot be confirmed; subjects with designated owners stay owner-only). The audit trail records this key, never an owner."
 };
